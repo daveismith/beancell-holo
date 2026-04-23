@@ -8,12 +8,15 @@
 #![deny(clippy::large_stack_frames)]
 
 use defmt::info;
+use beancell_holo::cli::handlers::{EchoCommand, RebootCommand};
+use beancell_holo::cli::io::CliIo;
+use beancell_holo::cli::{Command, CommandDispatcher};
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::{Duration, Timer};
 use esp_hal::Async;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagTx};
+use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
 use panic_rtt_target as _;
 
 extern crate alloc;
@@ -45,7 +48,7 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     // Initialize USB Serial JTAG
-    let (_, usb_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
+    let (usb_rx, usb_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
         .into_async()
         .split();
 
@@ -56,7 +59,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // TODO: Spawn some tasks
     //let _ = spawner;
-    spawner.spawn(usb_writer(usb_tx)).ok();
+    spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
 
     loop {
         info!("Hello world!");
@@ -68,24 +71,17 @@ async fn main(spawner: Spawner) -> ! {
 
 
 #[embassy_executor::task]
-async fn usb_writer(
-    mut tx: UsbSerialJtagTx<'static, Async>
-) {
-    use core::fmt::Write;
-    embedded_io_async::Write::write_all(
-        &mut tx,
-        b"Hello async USB Serial JTAG. Type something.\r\n",
-    )
-    .await
-    .unwrap();
-    
-    let mut ticker = Ticker::every(Duration::from_hz(1));
-    loop {
-        //let message = signal.wait().await;
-        //signal.reset();
-        //write!(&mut tx, "-- received ('{}') --\r\n", message).unwrap();
-        write!(&mut tx, "Hello async USB Serial JTAG. Type something.\r\n").unwrap();
-        embedded_io_async::Write::flush(&mut tx).await.unwrap();
-        ticker.next().await;
-    }
+async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {
+    let mut io = CliIo::new(rx, tx);
+    let commands: [Command<CliIo<'static>>; 2] = [
+        Command::new("echo", "Echo a message back", EchoCommand),
+        Command::new(
+            "reboot",
+            "Reboot device. Usage: reboot [normal|bootloader]",
+            RebootCommand,
+        ),
+    ];
+    let dispatcher = CommandDispatcher::new(&commands);
+
+    beancell_holo::cli::task::run_cli(&dispatcher, &mut io, "beancell> ").await;
 }
