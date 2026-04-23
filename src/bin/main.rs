@@ -9,9 +9,11 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Ticker, Timer};
+use esp_hal::Async;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagTx};
 use panic_rtt_target as _;
 
 extern crate alloc;
@@ -29,7 +31,7 @@ async fn main(spawner: Spawner) -> ! {
     // generator version: 1.2.0
 
     rtt_target::rtt_init_defmt!();
-
+    
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
@@ -42,13 +44,19 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    let (mut _wifi_controller, _interfaces) =
-        esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
-            .expect("Failed to initialize Wi-Fi controller");
+    // Initialize USB Serial JTAG
+    let (_, usb_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
+        .into_async()
+        .split();
+
+    //let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
+    //let (mut _wifi_controller, _interfaces) =
+    //    esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
+    //        .expect("Failed to initialize Wi-Fi controller");
 
     // TODO: Spawn some tasks
-    let _ = spawner;
+    //let _ = spawner;
+    spawner.spawn(usb_writer(usb_tx)).ok();
 
     loop {
         info!("Hello world!");
@@ -56,4 +64,28 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
+}
+
+
+#[embassy_executor::task]
+async fn usb_writer(
+    mut tx: UsbSerialJtagTx<'static, Async>
+) {
+    use core::fmt::Write;
+    embedded_io_async::Write::write_all(
+        &mut tx,
+        b"Hello async USB Serial JTAG. Type something.\r\n",
+    )
+    .await
+    .unwrap();
+    
+    let mut ticker = Ticker::every(Duration::from_hz(1));
+    loop {
+        //let message = signal.wait().await;
+        //signal.reset();
+        //write!(&mut tx, "-- received ('{}') --\r\n", message).unwrap();
+        write!(&mut tx, "Hello async USB Serial JTAG. Type something.\r\n").unwrap();
+        embedded_io_async::Write::flush(&mut tx).await.unwrap();
+        ticker.next().await;
+    }
 }
