@@ -102,27 +102,6 @@ impl<'a> CliIo<'a> {
         consumed
     }
 
-    async fn write_normalized_async(&mut self, buf: &[u8]) -> Result<(), Infallible> {
-        let mut index = 0;
-
-        while index < buf.len() {
-            let mut chunk: Vec<u8, TX_CHUNK_SIZE> = Vec::new();
-            let consumed = self.fill_normalized_chunk(&buf[index..], &mut chunk);
-
-            if consumed == 0 && chunk.is_empty() {
-                break;
-            }
-
-            if !chunk.is_empty() {
-                embedded_io_async::Write::write_all(&mut self.tx, chunk.as_slice()).await?;
-            }
-
-            index += consumed;
-        }
-
-        Ok(())
-    }
-
     fn write_normalized_blocking(&mut self, buf: &[u8]) -> Result<(), Infallible> {
         let mut index = 0;
 
@@ -158,13 +137,19 @@ impl embedded_io_async::ErrorType for CliIo<'_> {
 
 impl Read for CliIo<'_> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        embedded_io_async::Read::read(&mut self.rx, buf).await
+        loop {
+            let len = embedded_io_async::Read::read(&mut self.rx, buf).await?;
+            if len > 0 {
+                return Ok(len);
+            }
+            embassy_time::Timer::after_millis(1).await;
+        }
     }
 }
 
 impl Write for CliIo<'_> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        self.write_normalized_async(buf).await?;
+        embedded_io_async::Write::write_all(&mut self.tx, buf).await?;
         Ok(buf.len())
     }
 

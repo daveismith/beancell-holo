@@ -14,7 +14,9 @@ Provide a native, no-std CLI in the main firmware crate without compile/runtime 
   - `CliIo` wrapper over `UsbSerialJtagRx/UsbSerialJtagTx`
   - Implements `embedded_io_async::Read`, `embedded_io_async::Write`, `core::fmt::Write`
 - `src/cli/task.rs`
-  - Prompt loop, line editing (`backspace`, `Ctrl-C`), dispatch invocation
+  - Prompt loop with built-in line editor
+  - Supports cursor movement (left/right), backspace/delete, and command history (up/down)
+  - Configured with fixed maximum line length and ~256-byte in-memory history budget
 - `src/cli/handlers.rs`
   - `EchoCommand`
   - `RebootCommand` with subcommands `normal` and `bootloader`
@@ -45,6 +47,7 @@ Firmware wiring is in `src/bin/main.rs`:
 - Device smoke testing via:
   - `cargo espflash flash`
   - `tio /dev/tty.usbmodem101`
+- Verify editing/history behavior: left/right movement, backspace, up/down recall.
 
 ## Guardrail
 
