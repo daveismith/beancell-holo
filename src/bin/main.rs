@@ -9,13 +9,14 @@
 
 use defmt::info;
 use beancell_holo::cli::handlers::{EchoCommand, RebootCommand};
-use beancell_holo::cli::io::CliIo;
+use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
 use beancell_holo::cli::{Command, CommandDispatcher};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::Async;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::uart::{Config as UartConfig, Uart, UartRx, UartTx};
 use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
 use panic_rtt_target as _;
 
@@ -52,6 +53,13 @@ async fn main(spawner: Spawner) -> ! {
         .into_async()
         .split();
 
+    let (uart_rx, uart_tx) = Uart::new(peripherals.UART0, UartConfig::default())
+        .unwrap()
+        .with_rx(peripherals.GPIO3)
+        .with_tx(peripherals.GPIO4)
+        .into_async()
+        .split();
+
     //let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     //let (mut _wifi_controller, _interfaces) =
     //    esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
@@ -60,6 +68,7 @@ async fn main(spawner: Spawner) -> ! {
     // TODO: Spawn some tasks
     //let _ = spawner;
     spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
+    spawner.spawn(uart_cli_task(uart_rx, uart_tx)).ok();
 
     loop {
         info!("Hello world!");
@@ -72,8 +81,24 @@ async fn main(spawner: Spawner) -> ! {
 
 #[embassy_executor::task]
 async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {
-    let mut io = CliIo::new(rx, tx);
-    let commands: [Command<CliIo<'static>>; 2] = [
+    let mut io = UsbCliIo::new(rx, tx);
+    let commands: [Command<UsbCliIo<'static>>; 2] = [
+        Command::new("echo", "Echo a message back", EchoCommand),
+        Command::new(
+            "reboot",
+            "Reboot device. Usage: reboot [normal|bootloader]",
+            RebootCommand,
+        ),
+    ];
+    let dispatcher = CommandDispatcher::new(&commands);
+
+    beancell_holo::cli::task::run_cli(&dispatcher, &mut io, "beancell> ").await;
+}
+
+#[embassy_executor::task]
+async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
+    let mut io = UartCliIo::new(rx, tx);
+    let commands: [Command<UartCliIo<'static>>; 2] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",

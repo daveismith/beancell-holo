@@ -2,8 +2,12 @@
 
 ## USB CLI
 
-This firmware now includes a native USB CLI implementation under `src/cli`.
-The `usb-cli` folder is treated as reference-only and is not required for build/runtime.
+This firmware now includes native CLI implementations under `src/cli` on:
+
+- USB Serial JTAG
+- UART0 (RX GPIO3, TX GPIO4 @ 115200, no flow control)
+
+Each interface runs its own CLI session task. Command output and history are scoped to the interface/session that executed the command.
 
 ### Available Commands
 
@@ -38,6 +42,8 @@ cargo espflash flash
 ```bash
 tio /dev/tty.usbmodem101
 ```
+
+For UART, connect your USB-UART adapter at 115200 baud and open the corresponding `/dev/tty.*` device.
 
 ## Manual Smoke Test
 

@@ -1,9 +1,11 @@
-use core::fmt::{Error as FmtError, Result as FmtResult, Write as FmtWrite};
 use core::convert::Infallible;
+use core::fmt::{Error as FmtError, Result as FmtResult, Write as FmtWrite};
 
-use esp_hal::Async;
-use esp_hal::usb_serial_jtag::{UsbSerialJtagRx, UsbSerialJtagTx};
+use embassy_time::Timer;
 use embedded_io_async::{Read, Write};
+use esp_hal::Async;
+use esp_hal::uart::{UartRx, UartTx};
+use esp_hal::usb_serial_jtag::{UsbSerialJtagRx, UsbSerialJtagTx};
 use heapless::Vec;
 
 const TX_CHUNK_SIZE: usize = 128;
@@ -16,26 +18,18 @@ fn is_newline_pair(first: u8, second: u8) -> bool {
     (first == b'\r' && second == b'\n') || (first == b'\n' && second == b'\r')
 }
 
-pub struct CliIo<'a> {
-    rx: UsbSerialJtagRx<'a, Async>,
-    tx: UsbSerialJtagTx<'a, Async>,
+struct NewlineNormalizer {
     pending_newline: Option<u8>,
 }
 
-impl<'a> CliIo<'a> {
-    pub fn new(rx: UsbSerialJtagRx<'a, Async>, tx: UsbSerialJtagTx<'a, Async>) -> Self {
+impl NewlineNormalizer {
+    const fn new() -> Self {
         Self {
-            rx,
-            tx,
             pending_newline: None,
         }
     }
 
-    fn fill_normalized_chunk<const N: usize>(
-        &mut self,
-        input: &[u8],
-        out: &mut Vec<u8, N>,
-    ) -> usize {
+    fn fill_normalized_chunk<const N: usize>(&mut self, input: &[u8], out: &mut Vec<u8, N>) -> usize {
         let mut consumed = 0;
 
         if let Some(pending) = self.pending_newline {
@@ -102,7 +96,11 @@ impl<'a> CliIo<'a> {
         consumed
     }
 
-    fn write_normalized_blocking(&mut self, buf: &[u8]) -> Result<(), Infallible> {
+    fn write_normalized_blocking<E>(
+        &mut self,
+        buf: &[u8],
+        mut sink: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
         let mut index = 0;
 
         while index < buf.len() {
@@ -114,7 +112,7 @@ impl<'a> CliIo<'a> {
             }
 
             if !chunk.is_empty() {
-                self.tx.write(chunk.as_slice())?;
+                sink(chunk.as_slice())?;
             }
 
             index += consumed;
@@ -122,32 +120,47 @@ impl<'a> CliIo<'a> {
 
         Ok(())
     }
+}
 
+pub struct UsbCliIo<'a> {
+    rx: UsbSerialJtagRx<'a, Async>,
+    tx: UsbSerialJtagTx<'a, Async>,
+    normalizer: NewlineNormalizer,
+}
+
+impl<'a> UsbCliIo<'a> {
+    pub fn new(rx: UsbSerialJtagRx<'a, Async>, tx: UsbSerialJtagTx<'a, Async>) -> Self {
+        Self {
+            rx,
+            tx,
+            normalizer: NewlineNormalizer::new(),
+        }
+    }
     async fn flush_pending_newline(&mut self) -> Result<(), Infallible> {
-        if self.pending_newline.take().is_some() {
+        if self.normalizer.pending_newline.take().is_some() {
             embedded_io_async::Write::write_all(&mut self.tx, b"\r\n").await?;
         }
         Ok(())
     }
 }
 
-impl embedded_io_async::ErrorType for CliIo<'_> {
+impl embedded_io_async::ErrorType for UsbCliIo<'_> {
     type Error = Infallible;
 }
 
-impl Read for CliIo<'_> {
+impl Read for UsbCliIo<'_> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         loop {
             let len = embedded_io_async::Read::read(&mut self.rx, buf).await?;
             if len > 0 {
                 return Ok(len);
             }
-            embassy_time::Timer::after_millis(1).await;
+            Timer::after_millis(1).await;
         }
     }
 }
 
-impl Write for CliIo<'_> {
+impl Write for UsbCliIo<'_> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         embedded_io_async::Write::write_all(&mut self.tx, buf).await?;
         Ok(buf.len())
@@ -159,9 +172,77 @@ impl Write for CliIo<'_> {
     }
 }
 
-impl FmtWrite for CliIo<'_> {
+impl FmtWrite for UsbCliIo<'_> {
     fn write_str(&mut self, s: &str) -> FmtResult {
-        self.write_normalized_blocking(s.as_bytes())
+        self.normalizer
+            .write_normalized_blocking(s.as_bytes(), |chunk| self.tx.write(chunk))
+            .map_err(|_| FmtError)
+    }
+}
+
+pub struct UartCliIo<'a> {
+    rx: UartRx<'a, Async>,
+    tx: UartTx<'a, Async>,
+    normalizer: NewlineNormalizer,
+}
+
+impl<'a> UartCliIo<'a> {
+    pub fn new(rx: UartRx<'a, Async>, tx: UartTx<'a, Async>) -> Self {
+        Self {
+            rx,
+            tx,
+            normalizer: NewlineNormalizer::new(),
+        }
+    }
+
+    async fn flush_pending_newline(&mut self) -> Result<(), embedded_io_async::ErrorKind> {
+        if self.normalizer.pending_newline.take().is_some() {
+            embedded_io_async::Write::write_all(&mut self.tx, b"\r\n")
+                .await
+                .map_err(|_| embedded_io_async::ErrorKind::Other)?;
+        }
+        Ok(())
+    }
+}
+
+impl embedded_io_async::ErrorType for UartCliIo<'_> {
+    type Error = embedded_io_async::ErrorKind;
+}
+
+impl Read for UartCliIo<'_> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        loop {
+            let len = embedded_io_async::Read::read(&mut self.rx, buf)
+                .await
+                .map_err(|_| embedded_io_async::ErrorKind::Other)?;
+            if len > 0 {
+                return Ok(len);
+            }
+            Timer::after_millis(1).await;
+        }
+    }
+}
+
+impl Write for UartCliIo<'_> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        embedded_io_async::Write::write_all(&mut self.tx, buf)
+            .await
+            .map_err(|_| embedded_io_async::ErrorKind::Other)?;
+        Ok(buf.len())
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.flush_pending_newline().await?;
+        embedded_io_async::Write::flush(&mut self.tx)
+            .await
+            .map_err(|_| embedded_io_async::ErrorKind::Other)
+    }
+}
+
+impl FmtWrite for UartCliIo<'_> {
+    fn write_str(&mut self, s: &str) -> FmtResult {
+        self.normalizer
+            .write_normalized_blocking(s.as_bytes(), |chunk| self.tx.write(chunk).map(|_| ()))
             .map_err(|_| FmtError)
     }
 }
