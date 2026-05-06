@@ -8,13 +8,16 @@
 #![deny(clippy::large_stack_frames)]
 
 use defmt::info;
-use beancell_holo::cli::handlers::{EchoCommand, RebootCommand};
+use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootCommand};
 use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
 use beancell_holo::cli::{Command, CommandDispatcher};
+use beancell_holo::motor::{MotorConfig, MotorPins};
+use beancell_holo::motor::task::motor_task;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::Async;
 use esp_hal::clock::CpuClock;
+use esp_hal::gpio::Pin;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart, UartRx, UartTx};
 use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
@@ -53,6 +56,13 @@ async fn main(spawner: Spawner) -> ! {
         .into_async()
         .split();
 
+    let motor_pins = MotorPins {
+        en_pin: peripherals.GPIO0.degrade(),
+        ph_pin: peripherals.GPIO1.degrade(),
+        top_limit_pin: peripherals.GPIO6.degrade(),
+        bottom_limit_pin: peripherals.GPIO7.degrade(),
+    };
+
     let (uart_rx, uart_tx) = Uart::new(peripherals.UART0, UartConfig::default())
         .unwrap()
         .with_rx(peripherals.GPIO3)
@@ -67,6 +77,12 @@ async fn main(spawner: Spawner) -> ! {
 
     // TODO: Spawn some tasks
     //let _ = spawner;
+    spawner
+        .spawn(motor_task(
+            MotorConfig::default(),
+            motor_pins,
+        ))
+        .ok();
     spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
     spawner.spawn(uart_cli_task(uart_rx, uart_tx)).ok();
 
@@ -82,12 +98,17 @@ async fn main(spawner: Spawner) -> ! {
 #[embassy_executor::task]
 async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {
     let mut io = UsbCliIo::new(rx, tx);
-    let commands: [Command<UsbCliIo<'static>>; 2] = [
+    let commands: [Command<UsbCliIo<'static>>; 3] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
             "Reboot device. Usage: reboot [normal|bootloader]",
             RebootCommand,
+        ),
+        Command::new(
+            "motor",
+            "Motor control. Usage: motor <home|goto|vel|dir|raw|stop|status>",
+            MotorCommandHandler,
         ),
     ];
     let dispatcher = CommandDispatcher::new(&commands);
@@ -98,12 +119,17 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
 #[embassy_executor::task]
 async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
     let mut io = UartCliIo::new(rx, tx);
-    let commands: [Command<UartCliIo<'static>>; 2] = [
+    let commands: [Command<UartCliIo<'static>>; 3] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
             "Reboot device. Usage: reboot [normal|bootloader]",
             RebootCommand,
+        ),
+        Command::new(
+            "motor",
+            "Motor control. Usage: motor <home|goto|vel|dir|raw|stop|status>",
+            MotorCommandHandler,
         ),
     ];
     let dispatcher = CommandDispatcher::new(&commands);

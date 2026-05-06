@@ -6,6 +6,7 @@ use core::fmt::Write as FmtWrite;
 use embedded_io_async::Write as AsyncWrite;
 
 use crate::cli::CommandHandler;
+use crate::motor::{MOTOR_CMD_CHANNEL, MOTOR_STATUS, MotorCommand};
 
 pub struct EchoCommand;
 
@@ -64,6 +65,162 @@ where
             }
             _ => {
                 writeln!(io, "Usage: reboot [normal|bootloader]").ok();
+            }
+        }
+    }
+}
+
+pub struct MotorCommandHandler;
+
+#[async_trait(?Send)]
+impl<IO> CommandHandler<IO> for MotorCommandHandler
+where
+    IO: AsyncWrite + FmtWrite,
+{
+    async fn execute(&self, args: &[&str], io: &mut IO) {
+        if args.len() < 2 {
+            writeln!(io, "Usage: motor <home|goto|vel|dir|raw|stop|status>").ok();
+            return;
+        }
+
+        match args[1] {
+            "home" => {
+                MOTOR_CMD_CHANNEL.send(MotorCommand::Home).await;
+                writeln!(io, "motor: homing requested").ok();
+            }
+            "goto" => {
+                writeln!(io, "motor: goto is disabled in limit-switch-only mode").ok();
+            }
+            "vel" => {
+                let Some(raw) = args.get(2) else {
+                    writeln!(io, "Usage: motor vel <pct_per_sec>").ok();
+                    return;
+                };
+                let Ok(velocity_pct_per_sec) = raw.parse::<f32>() else {
+                    writeln!(io, "Invalid velocity: {}", raw).ok();
+                    return;
+                };
+
+                MOTOR_CMD_CHANNEL
+                    .send(MotorCommand::SetVelocity {
+                        velocity_pct_per_sec,
+                    })
+                    .await;
+                writeln!(io, "motor: target velocity set to {:.2}%/s", velocity_pct_per_sec).ok();
+            }
+            "dir" => {
+                let Some(raw) = args.get(2).copied() else {
+                    writeln!(io, "Usage: motor dir <normal|reversed|status>").ok();
+                    return;
+                };
+
+                match raw {
+                    "normal" => {
+                        MOTOR_CMD_CHANNEL
+                            .send(MotorCommand::SetDirectionPolarity {
+                                high_is_toward_top: true,
+                            })
+                            .await;
+                        writeln!(io, "motor: direction set to normal (PH high => toward top)").ok();
+                    }
+                    "reversed" => {
+                        MOTOR_CMD_CHANNEL
+                            .send(MotorCommand::SetDirectionPolarity {
+                                high_is_toward_top: false,
+                            })
+                            .await;
+                        writeln!(io, "motor: direction set to reversed (PH low => toward top)").ok();
+                    }
+                    "status" => {
+                        let status = *MOTOR_STATUS.lock().await;
+                        writeln!(
+                            io,
+                            "motor: direction mapping is {}",
+                            if status.direction_high_is_toward_top {
+                                "normal (PH high => top)"
+                            } else {
+                                "reversed (PH low => top)"
+                            }
+                        )
+                        .ok();
+                    }
+                    _ => {
+                        writeln!(io, "Usage: motor dir <normal|reversed|status>").ok();
+                    }
+                }
+            }
+            "raw" => {
+                let Some(ph_raw) = args.get(2).copied() else {
+                    writeln!(io, "Usage: motor raw <ph:0|1> <en:0|1>").ok();
+                    return;
+                };
+                let Some(en_raw) = args.get(3).copied() else {
+                    writeln!(io, "Usage: motor raw <ph:0|1> <en:0|1>").ok();
+                    return;
+                };
+
+                let ph_high = match ph_raw {
+                    "0" => false,
+                    "1" => true,
+                    _ => {
+                        writeln!(io, "Invalid ph value: {} (use 0 or 1)", ph_raw).ok();
+                        return;
+                    }
+                };
+                let en_high = match en_raw {
+                    "0" => false,
+                    "1" => true,
+                    _ => {
+                        writeln!(io, "Invalid en value: {} (use 0 or 1)", en_raw).ok();
+                        return;
+                    }
+                };
+
+                MOTOR_CMD_CHANNEL
+                    .send(MotorCommand::DirectDrive { ph_high, en_high })
+                    .await;
+                writeln!(io, "motor: raw drive set ph={} en={}", ph_raw, en_raw).ok();
+            }
+            "stop" => {
+                MOTOR_CMD_CHANNEL.send(MotorCommand::Stop).await;
+                writeln!(io, "motor: stop requested").ok();
+            }
+            "status" => {
+                let status = *MOTOR_STATUS.lock().await;
+                writeln!(io, "state: {:?}", status.state).ok();
+                writeln!(io, "homed: {}", status.is_homed).ok();
+                match status.position_pct {
+                    Some(pos) => {
+                        writeln!(io, "position: {:.2}%", pos).ok();
+                    }
+                    None => {
+                        writeln!(io, "position: unknown").ok();
+                    }
+                }
+                writeln!(io, "target_position: {:?}", status.target_position_pct).ok();
+                writeln!(io, "target_velocity: {:.2}%/s", status.target_velocity_pct_per_sec).ok();
+                writeln!(io, "velocity: {:.2}%/s", status.velocity_pct_per_sec).ok();
+                writeln!(
+                    io,
+                    "direction_mapping: {}",
+                    if status.direction_high_is_toward_top {
+                        "normal (PH high => top)"
+                    } else {
+                        "reversed (PH low => top)"
+                    }
+                )
+                .ok();
+                writeln!(io, "encoder_count: {}", status.encoder_count).ok();
+                writeln!(io, "counts_per_stroke: {:?}", status.counts_per_stroke).ok();
+                writeln!(io, "top_limit: {}", status.at_top_limit).ok();
+                writeln!(io, "bottom_limit: {}", status.at_bottom_limit).ok();
+                writeln!(io, "raw_mode: {}", status.raw_mode_enabled).ok();
+                writeln!(io, "raw_ph_high: {}", status.raw_ph_high).ok();
+                writeln!(io, "raw_en_high: {}", status.raw_en_high).ok();
+                writeln!(io, "fault: {:?}", status.fault_code).ok();
+            }
+            _ => {
+                writeln!(io, "Usage: motor <home|goto|vel|dir|raw|stop|status>").ok();
             }
         }
     }
