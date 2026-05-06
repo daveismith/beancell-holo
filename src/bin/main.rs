@@ -11,7 +11,8 @@ use defmt::info;
 use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootCommand};
 use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
 use beancell_holo::cli::{Command, CommandDispatcher};
-use beancell_holo::motor::{MotorConfig, MotorPins};
+use beancell_holo::motor::encoder::encoder_task;
+use beancell_holo::motor::{EncoderPins, MotorConfig, MotorPins};
 use beancell_holo::motor::task::motor_task;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -62,6 +63,10 @@ async fn main(spawner: Spawner) -> ! {
         top_limit_pin: peripherals.GPIO6.degrade(),
         bottom_limit_pin: peripherals.GPIO7.degrade(),
     };
+    let encoder_pins = EncoderPins {
+        channel_a_pin: peripherals.GPIO21.degrade(),
+        channel_b_pin: peripherals.GPIO20.degrade(),
+    };
 
     let (uart_rx, uart_tx) = Uart::new(peripherals.UART0, UartConfig::default())
         .unwrap()
@@ -77,6 +82,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // TODO: Spawn some tasks
     //let _ = spawner;
+    spawner.spawn(encoder_task(encoder_pins)).ok();
     spawner
         .spawn(motor_task(
             MotorConfig::default(),

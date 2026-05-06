@@ -150,36 +150,51 @@ where
                 }
             }
             "raw" => {
-                let Some(ph_raw) = args.get(2).copied() else {
-                    writeln!(io, "Usage: motor raw <ph:0|1> <en:0|1>").ok();
-                    return;
-                };
-                let Some(en_raw) = args.get(3).copied() else {
-                    writeln!(io, "Usage: motor raw <ph:0|1> <en:0|1>").ok();
+                let Some(arg2) = args.get(2).copied() else {
+                    writeln!(io, "Usage: motor raw <ph:0|1> <en:0|1> | off | status").ok();
                     return;
                 };
 
-                let ph_high = match ph_raw {
-                    "0" => false,
-                    "1" => true,
-                    _ => {
-                        writeln!(io, "Invalid ph value: {} (use 0 or 1)", ph_raw).ok();
-                        return;
+                match arg2 {
+                    "status" => {
+                        let status = *MOTOR_STATUS.lock().await;
+                        writeln!(io, "raw_mode: {}", status.raw_mode_enabled).ok();
+                        writeln!(io, "raw_ph_high: {}", status.raw_ph_high).ok();
+                        writeln!(io, "raw_en_high: {}", status.raw_en_high).ok();
                     }
-                };
-                let en_high = match en_raw {
-                    "0" => false,
-                    "1" => true,
-                    _ => {
-                        writeln!(io, "Invalid en value: {} (use 0 or 1)", en_raw).ok();
-                        return;
+                    "off" => {
+                        MOTOR_CMD_CHANNEL.send(MotorCommand::Stop).await;
+                        writeln!(io, "motor: raw drive disabled").ok();
                     }
-                };
+                    ph_raw => {
+                        let Some(en_raw) = args.get(3).copied() else {
+                            writeln!(io, "Usage: motor raw <ph:0|1> <en:0|1> | off | status").ok();
+                            return;
+                        };
 
-                MOTOR_CMD_CHANNEL
-                    .send(MotorCommand::DirectDrive { ph_high, en_high })
-                    .await;
-                writeln!(io, "motor: raw drive set ph={} en={}", ph_raw, en_raw).ok();
+                        let ph_high = match ph_raw {
+                            "0" => false,
+                            "1" => true,
+                            _ => {
+                                writeln!(io, "Invalid ph value: {} (use 0 or 1)", ph_raw).ok();
+                                return;
+                            }
+                        };
+                        let en_high = match en_raw {
+                            "0" => false,
+                            "1" => true,
+                            _ => {
+                                writeln!(io, "Invalid en value: {} (use 0 or 1)", en_raw).ok();
+                                return;
+                            }
+                        };
+
+                        MOTOR_CMD_CHANNEL
+                            .send(MotorCommand::DirectDrive { ph_high, en_high })
+                            .await;
+                        writeln!(io, "motor: raw drive set ph={} en={}", ph_raw, en_raw).ok();
+                    }
+                }
             }
             "stop" => {
                 MOTOR_CMD_CHANNEL.send(MotorCommand::Stop).await;
