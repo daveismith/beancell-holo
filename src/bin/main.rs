@@ -5,15 +5,25 @@
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
     holding buffers for the duration of a data transfer."
 )]
-#![deny(clippy::large_stack_frames)]
+// remove the large frames restriction as it interferes with
+// embassy.
+//#![deny(clippy::large_stack_frames)]
 
+use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootCommand};
+use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
+use beancell_holo::cli::{Command, CommandDispatcher};
+use beancell_holo::motor::encoder::init_encoder_interrupts;
+use beancell_holo::motor::task::motor_task;
+use beancell_holo::motor::{EncoderConfig, EncoderInputPull, EncoderPins, MotorConfig, MotorPins};
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::{Duration, Timer};
 use esp_hal::Async;
 use esp_hal::clock::CpuClock;
+use esp_hal::gpio::Pin;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagTx};
+use esp_hal::uart::{Config as UartConfig, Uart, UartRx, UartTx};
+use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
 use panic_rtt_target as _;
 
 extern crate alloc;
@@ -31,7 +41,7 @@ async fn main(spawner: Spawner) -> ! {
     // generator version: 1.2.0
 
     rtt_target::rtt_init_defmt!();
-    
+
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
@@ -45,7 +55,31 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     // Initialize USB Serial JTAG
-    let (_, usb_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
+    let (usb_rx, usb_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
+        .into_async()
+        .split();
+
+    let motor_pins = MotorPins {
+        en_pin: peripherals.GPIO0.degrade(),
+        ph_pin: peripherals.GPIO1.degrade(),
+        top_limit_pin: peripherals.GPIO6.degrade(),
+        bottom_limit_pin: peripherals.GPIO7.degrade(),
+    };
+    let encoder_pins = EncoderPins {
+        channel_a_pin: peripherals.GPIO21.degrade(),
+        channel_b_pin: peripherals.GPIO20.degrade(),
+    };
+    let encoder_config = EncoderConfig {
+        input_pull: EncoderInputPull::None,
+        swap_channels: false,
+    };
+
+    init_encoder_interrupts(encoder_pins, encoder_config, peripherals.IO_MUX);
+
+    let (uart_rx, uart_tx) = Uart::new(peripherals.UART0, UartConfig::default())
+        .unwrap()
+        .with_rx(peripherals.GPIO3)
+        .with_tx(peripherals.GPIO4)
         .into_async()
         .split();
 
@@ -56,7 +90,11 @@ async fn main(spawner: Spawner) -> ! {
 
     // TODO: Spawn some tasks
     //let _ = spawner;
-    spawner.spawn(usb_writer(usb_tx)).ok();
+    spawner
+        .spawn(motor_task(MotorConfig::default(), motor_pins))
+        .ok();
+    spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
+    spawner.spawn(uart_cli_task(uart_rx, uart_tx)).ok();
 
     loop {
         info!("Hello world!");
@@ -66,26 +104,44 @@ async fn main(spawner: Spawner) -> ! {
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
 }
 
+#[embassy_executor::task]
+async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {
+    let mut io = UsbCliIo::new(rx, tx);
+    let commands: [Command<UsbCliIo<'static>>; 3] = [
+        Command::new("echo", "Echo a message back", EchoCommand),
+        Command::new(
+            "reboot",
+            "Reboot device. Usage: reboot [normal|bootloader]",
+            RebootCommand,
+        ),
+        Command::new(
+            "motor",
+            "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
+            MotorCommandHandler,
+        ),
+    ];
+    let dispatcher = CommandDispatcher::new(&commands);
+
+    beancell_holo::cli::task::run_cli(&dispatcher, &mut io, "beancell> ").await;
+}
 
 #[embassy_executor::task]
-async fn usb_writer(
-    mut tx: UsbSerialJtagTx<'static, Async>
-) {
-    use core::fmt::Write;
-    embedded_io_async::Write::write_all(
-        &mut tx,
-        b"Hello async USB Serial JTAG. Type something.\r\n",
-    )
-    .await
-    .unwrap();
-    
-    let mut ticker = Ticker::every(Duration::from_hz(1));
-    loop {
-        //let message = signal.wait().await;
-        //signal.reset();
-        //write!(&mut tx, "-- received ('{}') --\r\n", message).unwrap();
-        write!(&mut tx, "Hello async USB Serial JTAG. Type something.\r\n").unwrap();
-        embedded_io_async::Write::flush(&mut tx).await.unwrap();
-        ticker.next().await;
-    }
+async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
+    let mut io = UartCliIo::new(rx, tx);
+    let commands: [Command<UartCliIo<'static>>; 3] = [
+        Command::new("echo", "Echo a message back", EchoCommand),
+        Command::new(
+            "reboot",
+            "Reboot device. Usage: reboot [normal|bootloader]",
+            RebootCommand,
+        ),
+        Command::new(
+            "motor",
+            "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
+            MotorCommandHandler,
+        ),
+    ];
+    let dispatcher = CommandDispatcher::new(&commands);
+
+    beancell_holo::cli::task::run_cli(&dispatcher, &mut io, "beancell> ").await;
 }
