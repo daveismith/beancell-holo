@@ -7,7 +7,7 @@ use super::{
     MotorState, TuningState, raw_encoder_count, set_raw_encoder_count,
 };
 use crate::motor::pid_controller::PidController;
-use crate::motor::pid_storage::PidGains;
+use crate::motor::pid_storage::PidTuningStorage;
 use crate::motor::pid_tuner::PidTuner;
 use crate::motor::controller::SpeedController;
 
@@ -110,11 +110,19 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
     let mut ticker = Ticker::every(Duration::from_millis(config.control_period_ms));
 
     // Initialize PID controller with default gains
-    let mut pid_controller = PidController::new(PidGains::default());
+    let pid_storage = PidTuningStorage::new();
+    let loaded_gains = pid_storage.load_from_nvs().await;
+    let initial_gains = loaded_gains.unwrap_or_default();
+    let mut pid_controller = PidController::new(initial_gains);
     let mut pid_tuner = PidTuner::new();
     let mut autotune_phase = AutotunePhase::Idle;
     let mut pwm_accumulator = 0.0_f32;
     let dt_secs = (config.control_period_ms as f32) / 1000.0;
+
+    status.pid_kp = initial_gains.kp;
+    status.pid_ki = initial_gains.ki;
+    status.pid_kd = initial_gains.kd;
+    status.pid_gains_tuned = loaded_gains.is_some();
 
     loop {
         ticker.next().await;
@@ -221,6 +229,35 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                     target_position_pct = None;
                     target_velocity_pct_per_sec = velocity_pct_per_sec
                         .clamp(-config.max_velocity_pct_per_sec, config.max_velocity_pct_per_sec);
+                }
+                MotorCommand::SetPidGains { kp, ki, kd } => {
+                    let gains = crate::motor::pid_storage::PidGains { kp, ki, kd };
+                    pid_controller.set_gains(gains);
+                    if pid_storage.save_to_nvs(gains).await.is_err() {
+                        status.fault_code = Some("pid_nvs_save_failed");
+                    } else {
+                        status.fault_code = None;
+                        status.pid_gains_tuned = true;
+                    }
+                }
+                MotorCommand::LoadPidGains => {
+                    if let Some(gains) = pid_storage.load_from_nvs().await {
+                        pid_controller.set_gains(gains);
+                        status.fault_code = None;
+                        status.pid_gains_tuned = true;
+                    } else {
+                        status.fault_code = Some("pid_nvs_load_failed");
+                    }
+                }
+                MotorCommand::ResetPidGains => {
+                    let gains = crate::motor::pid_storage::PidGains::default();
+                    pid_controller.set_gains(gains);
+                    if pid_storage.clear_from_nvs().await.is_err() {
+                        status.fault_code = Some("pid_nvs_clear_failed");
+                    } else {
+                        status.fault_code = None;
+                        status.pid_gains_tuned = false;
+                    }
                 }
                 MotorCommand::SetDirectionPolarity { high_is_toward_top } => {
                     direction_high_is_toward_top = high_is_toward_top;
@@ -382,6 +419,9 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                         if let Some(gains) = pid_tuner.calculate_gains() {
                             info!("Tuning complete: Kp={}, Ki={}, Kd={}", gains.kp, gains.ki, gains.kd);
                             pid_controller.set_gains(gains);
+                                    if pid_storage.save_to_nvs(gains).await.is_err() {
+                                        status.fault_code = Some("pid_nvs_save_failed");
+                                    }
                             status.tuning_state = TuningState::Complete;
                                     status.tuning_progress_pct = 100.0;
                                     status.pid_gains_tuned = true;

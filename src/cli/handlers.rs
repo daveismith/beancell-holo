@@ -313,14 +313,18 @@ where
                             return;
                         };
                         
-                        writeln!(io, "motor pid: Set Kp={}, Ki={}, Kd={}", kp, ki, kd).ok();
-                        writeln!(io, "motor pid: PID gains updated (NVS storage not yet connected)").ok();
+                        MOTOR_CMD_CHANNEL
+                            .send(MotorCommand::SetPidGains { kp, ki, kd })
+                            .await;
+                        writeln!(io, "motor pid: set requested Kp={}, Ki={}, Kd={}", kp, ki, kd).ok();
                     }
                     "load" => {
-                        writeln!(io, "motor pid: Reloading gains from NVS (storage not yet connected)").ok();
+                        MOTOR_CMD_CHANNEL.send(MotorCommand::LoadPidGains).await;
+                        writeln!(io, "motor pid: reload requested").ok();
                     }
                     "reset" => {
-                        writeln!(io, "motor pid: Gains reset to defaults (Kp=0.5, Ki=0.01, Kd=0.1)").ok();
+                        MOTOR_CMD_CHANNEL.send(MotorCommand::ResetPidGains).await;
+                        writeln!(io, "motor pid: reset requested (defaults restored)").ok();
                     }
                     _ => {
                         writeln!(io, "Usage: motor pid <status|set|load|reset>").ok();
