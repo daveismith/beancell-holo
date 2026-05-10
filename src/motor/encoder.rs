@@ -39,7 +39,9 @@ fn gpio_encoder_handler() {
     // SAFETY: see comment on ENCODER_A/B statics above.
     let (a, b) = unsafe {
         match (
+            #[allow(clippy::deref_addrof)]
             (*(&raw mut ENCODER_A)).as_mut(),
+            #[allow(clippy::deref_addrof)]
             (*(&raw mut ENCODER_B)).as_mut(),
         ) {
             (Some(a), Some(b)) => (a, b),

@@ -61,7 +61,7 @@ where
 
         if args[0] == "help" {
             writeln!(io, "Available commands:").ok();
-            writeln!(io, "  {:<10} - {}", "help", "Show this help output").ok();
+            writeln!(io, "  {:<10} - Show this help output", "help").ok();
             for cmd in self.commands {
                 writeln!(io, "  {:<10} - {}", cmd.name, cmd.description).ok();
             }

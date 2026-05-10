@@ -1,3 +1,5 @@
+use core::f32;
+
 use crate::motor::pid_storage::PidGains;
 use defmt::{info, warn};
 
@@ -30,6 +32,12 @@ pub struct PidTuner {
     half_period_samples: i32,
     control_cycles_elapsed: i32,
     max_control_cycles: i32, // Safety limit (~10 seconds at 10ms cycles)
+}
+
+impl Default for PidTuner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PidTuner {
@@ -162,8 +170,7 @@ impl PidTuner {
         // Calculate critical gain from relay amplitude d and oscillation amplitude a.
         // K_u = (4 * d) / (π * a)
         // where a is half of peak-to-peak amplitude.
-        let pi = 3.14159265359;
-        let k_u = (4.0 * self.relay_amplitude) / (pi * amplitude);
+        let k_u = (4.0 * self.relay_amplitude) / (f32::consts::PI * amplitude);
 
         if self.half_period_samples <= 0 {
             warn!("Invalid tuning period samples");

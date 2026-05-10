@@ -194,11 +194,9 @@ where
                 }
             }
             b if b.is_ascii_graphic() || b == b' ' => {
-                if line.len() < MAX_LINE_SIZE - 1 {
-                    if line.insert(cursor, b as char).is_ok() {
-                        cursor += 1;
-                        redraw_line(io, prompt, line.as_str(), cursor).await;
-                    }
+                if line.len() < MAX_LINE_SIZE - 1 && line.insert(cursor, b as char).is_ok() {
+                    cursor += 1;
+                    redraw_line(io, prompt, line.as_str(), cursor).await;
                 }
             }
             _ => {}

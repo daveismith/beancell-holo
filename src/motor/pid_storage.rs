@@ -149,6 +149,12 @@ pub struct PidTuningStorage {
     _key: &'static str,
 }
 
+impl Default for PidTuningStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PidTuningStorage {
     pub const fn new() -> Self {
         Self {
