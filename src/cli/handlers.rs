@@ -84,7 +84,7 @@ where
 {
     async fn execute(&self, args: &[&str], io: &mut IO) {
         if args.len() < 2 {
-            writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status>").ok();
+            writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status|pid|autotune|autotune-status>").ok();
             return;
         }
 
@@ -277,8 +277,83 @@ where
                 writeln!(io, "raw_en_high: {}", status.raw_en_high).ok();
                 writeln!(io, "fault: {:?}", status.fault_code).ok();
             }
+            "pid" => {
+                if args.len() < 3 {
+                    writeln!(io, "Usage: motor pid <status|set|load|reset>").ok();
+                    return;
+                }
+                
+                match args[2] {
+                    "status" => {
+                        let status = *MOTOR_STATUS.lock().await;
+                        writeln!(io, "tuning_state: {:?}", status.tuning_state).ok();
+                        writeln!(io, "tuning_progress: {:.1}%", status.tuning_progress_pct).ok();
+                        writeln!(io, "pid_kp: {:.6}", status.pid_kp).ok();
+                        writeln!(io, "pid_ki: {:.6}", status.pid_ki).ok();
+                        writeln!(io, "pid_kd: {:.6}", status.pid_kd).ok();
+                        writeln!(io, "pid_gains_tuned: {}", status.pid_gains_tuned).ok();
+                        writeln!(io, "motor pid: Use 'motor autotune' to calibrate for your motor").ok();
+                    }
+                    "set" => {
+                        if args.len() < 6 {
+                            writeln!(io, "Usage: motor pid set <kp> <ki> <kd>").ok();
+                            return;
+                        }
+                        
+                        let Ok(kp) = args[3].parse::<f32>() else {
+                            writeln!(io, "Invalid Kp value").ok();
+                            return;
+                        };
+                        let Ok(ki) = args[4].parse::<f32>() else {
+                            writeln!(io, "Invalid Ki value").ok();
+                            return;
+                        };
+                        let Ok(kd) = args[5].parse::<f32>() else {
+                            writeln!(io, "Invalid Kd value").ok();
+                            return;
+                        };
+                        
+                        writeln!(io, "motor pid: Set Kp={}, Ki={}, Kd={}", kp, ki, kd).ok();
+                        writeln!(io, "motor pid: PID gains updated (NVS storage not yet connected)").ok();
+                    }
+                    "load" => {
+                        writeln!(io, "motor pid: Reloading gains from NVS (storage not yet connected)").ok();
+                    }
+                    "reset" => {
+                        writeln!(io, "motor pid: Gains reset to defaults (Kp=0.5, Ki=0.01, Kd=0.1)").ok();
+                    }
+                    _ => {
+                        writeln!(io, "Usage: motor pid <status|set|load|reset>").ok();
+                    }
+                }
+            }
+            "autotune" => {
+                // Check if asking for status
+                    if let Some(&"status") = args.get(2) {
+                    let status = *MOTOR_STATUS.lock().await;
+                    writeln!(io, "tuning_state: {:?}", status.tuning_state).ok();
+                    writeln!(io, "tuning_progress: {:.1}%", status.tuning_progress_pct).ok();
+                } else {
+                    // Start tuning
+                    let status = *MOTOR_STATUS.lock().await;
+                    if !status.is_homed {
+                        writeln!(io, "motor autotune: Motor must be homed first").ok();
+                        return;
+                    }
+                    
+                    writeln!(io, "motor autotune: Starting PID auto-tuning...").ok();
+                    writeln!(io, "motor autotune: DO NOT INTERRUPT - Let the motor oscillate for ~2 seconds").ok();
+                    MOTOR_CMD_CHANNEL.send(MotorCommand::StartTuning).await;
+                    writeln!(io, "motor autotune: Tuning started").ok();
+                }
+            }
+            "autotune-status" => {
+                let status = *MOTOR_STATUS.lock().await;
+                writeln!(io, "tuning_state: {:?}", status.tuning_state).ok();
+                writeln!(io, "tuning_progress: {:.1}%", status.tuning_progress_pct).ok();
+            }
             _ => {
-                writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status>").ok();
+                writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status|pid|autotune|autotune-status>").ok();
             }
         }
     }

@@ -1,10 +1,15 @@
 use embassy_time::{Duration, Ticker};
 use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, Pull};
+use defmt::info;
 
 use super::{
     MOTOR_CMD_CHANNEL, MOTOR_STATUS, MOTOR_STATUS_SIGNAL, MotorCommand, MotorConfig, MotorPins,
-    MotorState, raw_encoder_count, set_raw_encoder_count,
+    MotorState, TuningState, raw_encoder_count, set_raw_encoder_count,
 };
+use crate::motor::pid_controller::PidController;
+use crate::motor::pid_storage::PidGains;
+use crate::motor::pid_tuner::PidTuner;
+use crate::motor::controller::SpeedController;
 
 const MIN_VALID_COUNTS_PER_STROKE: i32 = 20;
 
@@ -20,14 +25,20 @@ fn apply_drive(
     direction_high_is_toward_top: bool,
     ph_pin: &mut Output<'_>,
     en_pin: &mut Output<'_>,
-    velocity_pct_per_sec: f32,
+    duty_cycle: f32,
+    min_run_duty_pct: u8,
+    max_run_duty_pct: u8,
+    pwm_accumulator: &mut f32,
 ) {
-    if velocity_pct_per_sec.abs() < 0.001 {
+    // duty_cycle ranges from -1.0 (full reverse) to +1.0 (full forward)
+    // Software PWM (pulse-density) so PID output magnitude affects motor effort.
+    if duty_cycle.abs() < 0.001 {
         en_pin.set_low();
+        *pwm_accumulator = 0.0;
         return;
     }
 
-    let toward_top = velocity_pct_per_sec > 0.0;
+    let toward_top = duty_cycle > 0.0;
     let dir_high = if direction_high_is_toward_top {
         toward_top
     } else {
@@ -40,8 +51,18 @@ fn apply_drive(
         ph_pin.set_low();
     }
 
-    // Direct GPIO drive for EN pin: bring-up mode (on/off, no PWM).
-    en_pin.set_high();
+    let requested = duty_cycle.abs().clamp(0.0, 1.0);
+    let min_duty = (min_run_duty_pct as f32 / 100.0).clamp(0.0, 1.0);
+    let max_duty = (max_run_duty_pct as f32 / 100.0).clamp(min_duty, 1.0);
+    let effective_duty = (min_duty + (max_duty - min_duty) * requested).clamp(0.0, 1.0);
+
+    *pwm_accumulator += effective_duty;
+    if *pwm_accumulator >= 1.0 {
+        en_pin.set_high();
+        *pwm_accumulator -= 1.0;
+    } else {
+        en_pin.set_low();
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +70,13 @@ enum HomingPhase {
     SeekBottom,
     SeekTop,
     ReturnBottom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutotunePhase {
+    Idle,
+    Centering,
+    Relay,
 }
 
 #[embassy_executor::task]
@@ -80,6 +108,13 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
     let mut homing_phase: Option<HomingPhase> = None;
     let mut direct_drive: Option<(bool, bool)> = None;
     let mut ticker = Ticker::every(Duration::from_millis(config.control_period_ms));
+
+    // Initialize PID controller with default gains
+    let mut pid_controller = PidController::new(PidGains::default());
+    let mut pid_tuner = PidTuner::new();
+    let mut autotune_phase = AutotunePhase::Idle;
+    let mut pwm_accumulator = 0.0_f32;
+    let dt_secs = (config.control_period_ms as f32) / 1000.0;
 
     loop {
         ticker.next().await;
@@ -152,6 +187,9 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                     homing_phase = None;
                     target_velocity_pct_per_sec = 0.0;
                     target_position_pct = None;
+                    pid_tuner.abort();
+                    status.tuning_state = TuningState::Idle;
+                    status.tuning_progress_pct = 0.0;
                     direct_drive = None;
                     status.raw_mode_enabled = false;
                     status.raw_ph_high = false;
@@ -159,6 +197,11 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                 }
                 MotorCommand::SetPosition { target_pct } => {
                     if counts_per_stroke.is_some() {
+                        pid_tuner.abort();
+                        autotune_phase = AutotunePhase::Idle;
+                        pid_controller.reset();
+                        status.tuning_state = TuningState::Idle;
+                        status.tuning_progress_pct = 0.0;
                         status.state = MotorState::MovingToPosition;
                         status.fault_code = None;
                         direct_drive = None;
@@ -191,6 +234,43 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                     status.raw_mode_enabled = true;
                     status.raw_ph_high = ph_high;
                     status.raw_en_high = en_high;
+                }
+                MotorCommand::StartTuning => {
+                    if status.is_homed && status.state == MotorState::Idle {
+                        info!("Starting PID auto-tuning");
+                        pid_controller.reset();
+                        pid_tuner.abort();
+                        status.state = MotorState::MovingToPosition;
+                        status.tuning_state = TuningState::Idle;
+                        status.tuning_progress_pct = 0.0;
+                        status.pid_gains_tuned = false;
+                        status.fault_code = None;
+                        // Center first when starting near stroke ends; this makes tuning representative.
+                        let pos = status.position_pct.unwrap_or(50.0);
+                        let center_pct = 50.0;
+                        let near_end = pos <= 20.0 || pos >= 80.0;
+                        if near_end {
+                            autotune_phase = AutotunePhase::Centering;
+                            target_position_pct = Some(center_pct);
+                        } else {
+                            autotune_phase = AutotunePhase::Relay;
+                            target_position_pct = None;
+                            status.tuning_state = TuningState::FindingAmplitude;
+                            pid_tuner.start(pos);
+                        }
+                    } else {
+                        status.fault_code = Some("cannot_tune_not_homed_or_idle");
+                    }
+                }
+                MotorCommand::AbortTuning => {
+                    if status.tuning_state != TuningState::Idle {
+                        info!("Aborting PID auto-tuning");
+                        pid_tuner.abort();
+                        autotune_phase = AutotunePhase::Idle;
+                        status.tuning_state = TuningState::Idle;
+                        status.state = MotorState::Idle;
+                        target_position_pct = None;
+                    }
                 }
             }
         }
@@ -266,7 +346,60 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                 }
             },
             MotorState::MovingToPosition => {
-                if let (Some(target_pct), Some(stroke)) = (target_position_pct, counts_per_stroke) {
+                let current_pct = if let Some(stroke) = counts_per_stroke {
+                    if stroke > 0 {
+                        ((current_logical_encoder_count as f32 / stroke as f32) * 100.0).clamp(0.0, 100.0)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+                
+                // If tuning, execute relay feedback (regardless of target_position_pct)
+                if autotune_phase == AutotunePhase::Centering {
+                    let center_error = 50.0 - current_pct;
+                    let center_band = 2.0;
+                    if center_error.abs() <= center_band {
+                        autotune_phase = AutotunePhase::Relay;
+                        target_position_pct = None;
+                        status.tuning_state = TuningState::FindingAmplitude;
+                        status.tuning_progress_pct = 0.0;
+                        pid_controller.reset();
+                        pid_tuner.start(current_pct);
+                        status.velocity_pct_per_sec = 0.0;
+                    }
+                }
+
+                if autotune_phase == AutotunePhase::Relay
+                    && matches!(status.tuning_state, TuningState::FindingAmplitude | TuningState::MeasuringPeriod)
+                {
+                    status.tuning_progress_pct = pid_tuner.progress_percent();
+                    let (relay_duty, tuning_complete) = pid_tuner.step(current_pct);
+                    commanded_velocity = relay_duty * config.max_velocity_pct_per_sec;
+                    
+                    if tuning_complete {
+                        if let Some(gains) = pid_tuner.calculate_gains() {
+                            info!("Tuning complete: Kp={}, Ki={}, Kd={}", gains.kp, gains.ki, gains.kd);
+                            pid_controller.set_gains(gains);
+                            status.tuning_state = TuningState::Complete;
+                                    status.tuning_progress_pct = 100.0;
+                                    status.pid_gains_tuned = true;
+                            pid_tuner.abort();
+                                    autotune_phase = AutotunePhase::Idle;
+                        } else {
+                            status.tuning_state = TuningState::Failed;
+                                    status.tuning_progress_pct = 100.0;
+                                    pid_tuner.abort();
+                                    autotune_phase = AutotunePhase::Idle;
+                        }
+                        status.state = MotorState::Idle;
+                        target_position_pct = None;
+                        commanded_velocity = 0.0;
+                    }
+                    status.velocity_pct_per_sec = commanded_velocity;
+                } else if let (Some(target_pct), Some(stroke)) = (target_position_pct, counts_per_stroke) {
+                    // Normal position control with PID
                     if stroke < MIN_VALID_COUNTS_PER_STROKE {
                         status.state = MotorState::Fault;
                         status.fault_code = Some("encoder_not_counting");
@@ -276,21 +409,43 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                         status.velocity_pct_per_sec = 0.0;
                         commanded_velocity = 0.0;
                     } else {
-                    let current_pct = ((current_logical_encoder_count as f32 / stroke as f32) * 100.0)
-                        .clamp(0.0, 100.0);
-                    let error_pct = target_pct - current_pct;
-                    if error_pct.abs() <= config.position_deadband_pct {
-                        status.state = MotorState::Idle;
-                        status.velocity_pct_per_sec = 0.0;
-                        target_position_pct = None;
-                        commanded_velocity = 0.0;
-                    } else if error_pct > 0.0 {
-                        commanded_velocity = config.max_velocity_pct_per_sec;
-                        status.velocity_pct_per_sec = commanded_velocity;
-                    } else {
-                        commanded_velocity = -config.max_velocity_pct_per_sec;
-                        status.velocity_pct_per_sec = commanded_velocity;
-                    }
+                        let error_pct = target_pct - current_pct;
+                        
+                        // Use PID controller to compute duty cycle
+                        let mut duty_cycle = pid_controller.compute(error_pct, 0.0, dt_secs);
+
+                        // Distance-based cruise floor for better full-stroke move time.
+                        let abs_error = error_pct.abs();
+                        let min_cruise = if abs_error > 30.0 {
+                            0.80
+                        } else if abs_error > 15.0 {
+                            0.60
+                        } else if abs_error > 6.0 {
+                            0.35
+                        } else {
+                            0.0
+                        };
+                        if min_cruise > 0.0 {
+                            let sign = if error_pct >= 0.0 { 1.0 } else { -1.0 };
+                            duty_cycle = sign * duty_cycle.abs().max(min_cruise);
+                        }
+
+                        // Decel envelope near target to avoid overshoot.
+                        let speed_scale = (abs_error / 12.0).clamp(0.25, 1.0);
+                        commanded_velocity = duty_cycle * config.max_velocity_pct_per_sec;
+                        commanded_velocity *= speed_scale;
+                        
+                        // Check if settled (use a tighter band for PID)
+                        let settle_band = 0.2; // Tighter than position_deadband_pct
+                        if error_pct.abs() <= settle_band && commanded_velocity.abs() < 1.0 {
+                            status.state = MotorState::Idle;
+                            status.velocity_pct_per_sec = 0.0;
+                            target_position_pct = None;
+                            commanded_velocity = 0.0;
+                            pid_controller.reset();
+                        } else {
+                            status.velocity_pct_per_sec = commanded_velocity;
+                        }
                     }
                 } else {
                     status.state = MotorState::Idle;
@@ -347,7 +502,10 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                 direction_high_is_toward_top,
                 &mut ph_pin,
                 &mut en_pin,
-                commanded_velocity,
+                (commanded_velocity / config.max_velocity_pct_per_sec).clamp(-1.0, 1.0),
+                config.min_run_duty_pct,
+                config.max_run_duty_pct,
+                &mut pwm_accumulator,
             );
 
             status.raw_mode_enabled = false;
@@ -357,6 +515,10 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
 
         status.target_position_pct = target_position_pct;
         status.target_velocity_pct_per_sec = target_velocity_pct_per_sec;
+        let gains = pid_controller.gains();
+        status.pid_kp = gains.kp;
+        status.pid_ki = gains.ki;
+        status.pid_kd = gains.kd;
 
         {
             let mut guard = MOTOR_STATUS.lock().await;

@@ -9,6 +9,9 @@ pub mod controller;
 pub mod driver;
 pub mod encoder;
 pub mod task;
+pub mod pid_controller;
+pub mod pid_storage;
+pub mod pid_tuner;
 
 pub const MOTOR_CMD_QUEUE_DEPTH: usize = 8;
 
@@ -81,10 +84,19 @@ impl Default for EncoderConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MotionDirection {
     TowardBottom,
     TowardTop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
+pub enum TuningState {
+    Idle,
+    FindingAmplitude,
+    MeasuringPeriod,
+    Complete,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +107,8 @@ pub enum MotorCommand {
     SetVelocity { velocity_pct_per_sec: f32 },
     SetDirectionPolarity { high_is_toward_top: bool },
     DirectDrive { ph_high: bool, en_high: bool },
+    StartTuning,
+    AbortTuning,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +140,12 @@ pub struct MotorStatus {
     pub raw_ph_high: bool,
     pub raw_en_high: bool,
     pub fault_code: Option<&'static str>,
+    pub tuning_state: TuningState,
+    pub tuning_progress_pct: f32,
+    pub pid_kp: f32,
+    pub pid_ki: f32,
+    pub pid_kd: f32,
+    pub pid_gains_tuned: bool,
 }
 
 impl Default for MotorStatus {
@@ -148,6 +168,12 @@ impl Default for MotorStatus {
             raw_ph_high: false,
             raw_en_high: false,
             fault_code: None,
+            tuning_state: TuningState::Idle,
+            tuning_progress_pct: 0.0,
+            pid_kp: 0.5,
+            pid_ki: 0.01,
+            pid_kd: 0.1,
+            pid_gains_tuned: false,
         }
     }
 }
@@ -173,6 +199,12 @@ pub static MOTOR_STATUS: Mutex<CriticalSectionRawMutex, MotorStatus> = Mutex::ne
     raw_ph_high: false,
     raw_en_high: false,
     fault_code: None,
+    tuning_state: TuningState::Idle,
+    tuning_progress_pct: 0.0,
+    pid_kp: 0.5,
+    pid_ki: 0.01,
+    pid_kd: 0.1,
+    pid_gains_tuned: false,
 });
 pub static MOTOR_RAW_ENCODER_COUNT: AtomicI32 = AtomicI32::new(0);
 pub static MOTOR_ENCODER_A_LEVEL: AtomicU8 = AtomicU8::new(0);

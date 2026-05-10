@@ -1,6 +1,6 @@
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MotorOutput {
-    pub normalized_duty: f32,
+    pub duty_cycle: f32, // -1.0 (full reverse) to +1.0 (full forward)
 }
 
 pub trait MotorDriver {
