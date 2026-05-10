@@ -23,7 +23,10 @@ impl PidController {
 
     pub fn set_gains(&mut self, gains: PidGains) {
         self.gains = gains;
-        info!("PID gains updated: Kp={}, Ki={}, Kd={}", gains.kp, gains.ki, gains.kd);
+        info!(
+            "PID gains updated: Kp={}, Ki={}, Kd={}",
+            gains.kp, gains.ki, gains.kd
+        );
     }
 
     pub fn reset(&mut self) {
@@ -37,7 +40,12 @@ impl PidController {
 }
 
 impl SpeedController for PidController {
-    fn compute(&mut self, position_error_pct: f32, _current_velocity_pct_per_sec: f32, dt_secs: f32) -> f32 {
+    fn compute(
+        &mut self,
+        position_error_pct: f32,
+        _current_velocity_pct_per_sec: f32,
+        dt_secs: f32,
+    ) -> f32 {
         // Proportional term
         let p_term = self.gains.kp * position_error_pct;
 

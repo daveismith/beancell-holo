@@ -4,7 +4,7 @@ use defmt::{info, warn};
 use embedded_storage::nor_flash::{NorFlash as SyncNorFlash, ReadNorFlash as SyncReadNorFlash};
 use embedded_storage_async::nor_flash::{ErrorType, MultiwriteNorFlash, NorFlash, ReadNorFlash};
 use esp_bootloader_esp_idf::partitions::{
-    DataPartitionSubType, PartitionType, PARTITION_TABLE_MAX_LEN, PartitionEntry,
+    DataPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionEntry, PartitionType,
     read_partition_table,
 };
 use esp_storage::{FlashStorage, FlashStorageError};
@@ -180,7 +180,10 @@ impl PidTuningStorage {
             ki: stored[1],
             kd: stored[2],
         };
-        info!("Loaded PID gains from flash: Kp={}, Ki={}, Kd={}", gains.kp, gains.ki, gains.kd);
+        info!(
+            "Loaded PID gains from flash: Kp={}, Ki={}, Kd={}",
+            gains.kp, gains.ki, gains.kd
+        );
         Some(gains)
     }
 
@@ -203,7 +206,10 @@ impl PidTuningStorage {
         .await
         .map_err(|_| ())?;
 
-        info!("Saved PID gains to flash: Kp={}, Ki={}, Kd={}", gains.kp, gains.ki, gains.kd);
+        info!(
+            "Saved PID gains to flash: Kp={}, Ki={}, Kd={}",
+            gains.kp, gains.ki, gains.kd
+        );
         Ok(())
     }
 

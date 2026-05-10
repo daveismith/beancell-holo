@@ -1,15 +1,15 @@
+use defmt::info;
 use embassy_time::{Duration, Ticker};
 use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, Pull};
-use defmt::info;
 
 use super::{
     MOTOR_CMD_CHANNEL, MOTOR_STATUS, MOTOR_STATUS_SIGNAL, MotorCommand, MotorConfig, MotorPins,
     MotorState, TuningState, raw_encoder_count, set_raw_encoder_count,
 };
+use crate::motor::controller::SpeedController;
 use crate::motor::pid_controller::PidController;
 use crate::motor::pid_storage::PidTuningStorage;
 use crate::motor::pid_tuner::PidTuner;
-use crate::motor::controller::SpeedController;
 
 const MIN_VALID_COUNTS_PER_STROKE: i32 = 20;
 
@@ -154,7 +154,10 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
         status.raw_mode_enabled = direct_drive.is_some();
         status.position_pct = if let Some(stroke) = counts_per_stroke {
             if stroke > 0 {
-                Some(((current_logical_encoder_count as f32 / stroke as f32) * 100.0).clamp(0.0, 100.0))
+                Some(
+                    ((current_logical_encoder_count as f32 / stroke as f32) * 100.0)
+                        .clamp(0.0, 100.0),
+                )
             } else if at_bottom_limit {
                 Some(config.min_position_pct)
             } else if at_top_limit {
@@ -227,8 +230,10 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                     direct_drive = None;
                     status.raw_mode_enabled = false;
                     target_position_pct = None;
-                    target_velocity_pct_per_sec = velocity_pct_per_sec
-                        .clamp(-config.max_velocity_pct_per_sec, config.max_velocity_pct_per_sec);
+                    target_velocity_pct_per_sec = velocity_pct_per_sec.clamp(
+                        -config.max_velocity_pct_per_sec,
+                        config.max_velocity_pct_per_sec,
+                    );
                 }
                 MotorCommand::SetPidGains { kp, ki, kd } => {
                     let gains = crate::motor::pid_storage::PidGains { kp, ki, kd };
@@ -331,183 +336,192 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
             status.raw_en_high = en_high;
         } else {
             match status.state {
-            MotorState::Idle => {
-                commanded_velocity = 0.0;
-            }
-            MotorState::Homing => match homing_phase {
-                Some(HomingPhase::SeekBottom) => {
-                    if at_bottom_limit {
-                        set_raw_encoder_count(0);
-                        status.logical_encoder_count = 0;
-                        status.raw_encoder_count = 0;
-                        homing_phase = Some(HomingPhase::SeekTop);
-                        commanded_velocity = 0.0;
-                    } else {
-                        commanded_velocity = -config.home_velocity_pct_per_sec;
-                    }
+                MotorState::Idle => {
+                    commanded_velocity = 0.0;
                 }
-                Some(HomingPhase::SeekTop) => {
-                    if at_top_limit {
-                        let stroke = raw_encoder_count().abs();
-                        if stroke >= MIN_VALID_COUNTS_PER_STROKE {
-                            counts_per_stroke = Some(stroke);
-                            status.counts_per_stroke = Some(stroke);
-                            homing_phase = Some(HomingPhase::ReturnBottom);
+                MotorState::Homing => match homing_phase {
+                    Some(HomingPhase::SeekBottom) => {
+                        if at_bottom_limit {
+                            set_raw_encoder_count(0);
+                            status.logical_encoder_count = 0;
+                            status.raw_encoder_count = 0;
+                            homing_phase = Some(HomingPhase::SeekTop);
+                            commanded_velocity = 0.0;
                         } else {
+                            commanded_velocity = -config.home_velocity_pct_per_sec;
+                        }
+                    }
+                    Some(HomingPhase::SeekTop) => {
+                        if at_top_limit {
+                            let stroke = raw_encoder_count().abs();
+                            if stroke >= MIN_VALID_COUNTS_PER_STROKE {
+                                counts_per_stroke = Some(stroke);
+                                status.counts_per_stroke = Some(stroke);
+                                homing_phase = Some(HomingPhase::ReturnBottom);
+                            } else {
+                                status.state = MotorState::Fault;
+                                status.fault_code = Some("encoder_not_counting");
+                                counts_per_stroke = None;
+                                status.counts_per_stroke = None;
+                                homing_phase = None;
+                            }
+                            commanded_velocity = 0.0;
+                        } else {
+                            commanded_velocity = config.home_velocity_pct_per_sec;
+                        }
+                    }
+                    Some(HomingPhase::ReturnBottom) => {
+                        if at_bottom_limit {
+                            set_raw_encoder_count(0);
+                            status.logical_encoder_count = 0;
+                            status.raw_encoder_count = 0;
+                            status.is_homed = true;
+                            status.state = MotorState::Idle;
+                            homing_phase = None;
+                            commanded_velocity = 0.0;
+                        } else {
+                            commanded_velocity = -config.home_velocity_pct_per_sec;
+                        }
+                    }
+                    None => {
+                        status.state = MotorState::Idle;
+                    }
+                },
+                MotorState::MovingToPosition => {
+                    let current_pct = if let Some(stroke) = counts_per_stroke {
+                        if stroke > 0 {
+                            ((current_logical_encoder_count as f32 / stroke as f32) * 100.0)
+                                .clamp(0.0, 100.0)
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+
+                    // If tuning, execute relay feedback (regardless of target_position_pct)
+                    if autotune_phase == AutotunePhase::Centering {
+                        let center_error = 50.0 - current_pct;
+                        let center_band = 2.0;
+                        if center_error.abs() <= center_band {
+                            autotune_phase = AutotunePhase::Relay;
+                            target_position_pct = None;
+                            status.tuning_state = TuningState::FindingAmplitude;
+                            status.tuning_progress_pct = 0.0;
+                            pid_controller.reset();
+                            pid_tuner.start(current_pct);
+                            status.velocity_pct_per_sec = 0.0;
+                        }
+                    }
+
+                    if autotune_phase == AutotunePhase::Relay
+                        && matches!(
+                            status.tuning_state,
+                            TuningState::FindingAmplitude | TuningState::MeasuringPeriod
+                        )
+                    {
+                        status.tuning_progress_pct = pid_tuner.progress_percent();
+                        let (relay_duty, tuning_complete) = pid_tuner.step(current_pct);
+                        commanded_velocity = relay_duty * config.max_velocity_pct_per_sec;
+
+                        if tuning_complete {
+                            if let Some(gains) = pid_tuner.calculate_gains() {
+                                info!(
+                                    "Tuning complete: Kp={}, Ki={}, Kd={}",
+                                    gains.kp, gains.ki, gains.kd
+                                );
+                                pid_controller.set_gains(gains);
+                                if pid_storage.save_to_nvs(gains).await.is_err() {
+                                    status.fault_code = Some("pid_nvs_save_failed");
+                                }
+                                status.tuning_state = TuningState::Complete;
+                                status.tuning_progress_pct = 100.0;
+                                status.pid_gains_tuned = true;
+                                pid_tuner.abort();
+                                autotune_phase = AutotunePhase::Idle;
+                            } else {
+                                status.tuning_state = TuningState::Failed;
+                                status.tuning_progress_pct = 100.0;
+                                pid_tuner.abort();
+                                autotune_phase = AutotunePhase::Idle;
+                            }
+                            status.state = MotorState::Idle;
+                            target_position_pct = None;
+                            commanded_velocity = 0.0;
+                        }
+                        status.velocity_pct_per_sec = commanded_velocity;
+                    } else if let (Some(target_pct), Some(stroke)) =
+                        (target_position_pct, counts_per_stroke)
+                    {
+                        // Normal position control with PID
+                        if stroke < MIN_VALID_COUNTS_PER_STROKE {
                             status.state = MotorState::Fault;
                             status.fault_code = Some("encoder_not_counting");
                             counts_per_stroke = None;
                             status.counts_per_stroke = None;
-                            homing_phase = None;
-                        }
-                        commanded_velocity = 0.0;
-                    } else {
-                        commanded_velocity = config.home_velocity_pct_per_sec;
-                    }
-                }
-                Some(HomingPhase::ReturnBottom) => {
-                    if at_bottom_limit {
-                        set_raw_encoder_count(0);
-                        status.logical_encoder_count = 0;
-                        status.raw_encoder_count = 0;
-                        status.is_homed = true;
-                        status.state = MotorState::Idle;
-                        homing_phase = None;
-                        commanded_velocity = 0.0;
-                    } else {
-                        commanded_velocity = -config.home_velocity_pct_per_sec;
-                    }
-                }
-                None => {
-                    status.state = MotorState::Idle;
-                }
-            },
-            MotorState::MovingToPosition => {
-                let current_pct = if let Some(stroke) = counts_per_stroke {
-                    if stroke > 0 {
-                        ((current_logical_encoder_count as f32 / stroke as f32) * 100.0).clamp(0.0, 100.0)
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                };
-                
-                // If tuning, execute relay feedback (regardless of target_position_pct)
-                if autotune_phase == AutotunePhase::Centering {
-                    let center_error = 50.0 - current_pct;
-                    let center_band = 2.0;
-                    if center_error.abs() <= center_band {
-                        autotune_phase = AutotunePhase::Relay;
-                        target_position_pct = None;
-                        status.tuning_state = TuningState::FindingAmplitude;
-                        status.tuning_progress_pct = 0.0;
-                        pid_controller.reset();
-                        pid_tuner.start(current_pct);
-                        status.velocity_pct_per_sec = 0.0;
-                    }
-                }
-
-                if autotune_phase == AutotunePhase::Relay
-                    && matches!(status.tuning_state, TuningState::FindingAmplitude | TuningState::MeasuringPeriod)
-                {
-                    status.tuning_progress_pct = pid_tuner.progress_percent();
-                    let (relay_duty, tuning_complete) = pid_tuner.step(current_pct);
-                    commanded_velocity = relay_duty * config.max_velocity_pct_per_sec;
-                    
-                    if tuning_complete {
-                        if let Some(gains) = pid_tuner.calculate_gains() {
-                            info!("Tuning complete: Kp={}, Ki={}, Kd={}", gains.kp, gains.ki, gains.kd);
-                            pid_controller.set_gains(gains);
-                                    if pid_storage.save_to_nvs(gains).await.is_err() {
-                                        status.fault_code = Some("pid_nvs_save_failed");
-                                    }
-                            status.tuning_state = TuningState::Complete;
-                                    status.tuning_progress_pct = 100.0;
-                                    status.pid_gains_tuned = true;
-                            pid_tuner.abort();
-                                    autotune_phase = AutotunePhase::Idle;
-                        } else {
-                            status.tuning_state = TuningState::Failed;
-                                    status.tuning_progress_pct = 100.0;
-                                    pid_tuner.abort();
-                                    autotune_phase = AutotunePhase::Idle;
-                        }
-                        status.state = MotorState::Idle;
-                        target_position_pct = None;
-                        commanded_velocity = 0.0;
-                    }
-                    status.velocity_pct_per_sec = commanded_velocity;
-                } else if let (Some(target_pct), Some(stroke)) = (target_position_pct, counts_per_stroke) {
-                    // Normal position control with PID
-                    if stroke < MIN_VALID_COUNTS_PER_STROKE {
-                        status.state = MotorState::Fault;
-                        status.fault_code = Some("encoder_not_counting");
-                        counts_per_stroke = None;
-                        status.counts_per_stroke = None;
-                        target_position_pct = None;
-                        status.velocity_pct_per_sec = 0.0;
-                        commanded_velocity = 0.0;
-                    } else {
-                        let error_pct = target_pct - current_pct;
-                        
-                        // Use PID controller to compute duty cycle
-                        let mut duty_cycle = pid_controller.compute(error_pct, 0.0, dt_secs);
-
-                        // Distance-based cruise floor for better full-stroke move time.
-                        let abs_error = error_pct.abs();
-                        let min_cruise = if abs_error > 30.0 {
-                            0.80
-                        } else if abs_error > 15.0 {
-                            0.60
-                        } else if abs_error > 6.0 {
-                            0.35
-                        } else {
-                            0.0
-                        };
-                        if min_cruise > 0.0 {
-                            let sign = if error_pct >= 0.0 { 1.0 } else { -1.0 };
-                            duty_cycle = sign * duty_cycle.abs().max(min_cruise);
-                        }
-
-                        // Decel envelope near target to avoid overshoot.
-                        let speed_scale = (abs_error / 12.0).clamp(0.25, 1.0);
-                        commanded_velocity = duty_cycle * config.max_velocity_pct_per_sec;
-                        commanded_velocity *= speed_scale;
-                        
-                        // Check if settled (use a tighter band for PID)
-                        let settle_band = 0.2; // Tighter than position_deadband_pct
-                        if error_pct.abs() <= settle_band && commanded_velocity.abs() < 1.0 {
-                            status.state = MotorState::Idle;
-                            status.velocity_pct_per_sec = 0.0;
                             target_position_pct = None;
+                            status.velocity_pct_per_sec = 0.0;
                             commanded_velocity = 0.0;
-                            pid_controller.reset();
                         } else {
-                            status.velocity_pct_per_sec = commanded_velocity;
+                            let error_pct = target_pct - current_pct;
+
+                            // Use PID controller to compute duty cycle
+                            let mut duty_cycle = pid_controller.compute(error_pct, 0.0, dt_secs);
+
+                            // Distance-based cruise floor for better full-stroke move time.
+                            let abs_error = error_pct.abs();
+                            let min_cruise = if abs_error > 30.0 {
+                                0.80
+                            } else if abs_error > 15.0 {
+                                0.60
+                            } else if abs_error > 6.0 {
+                                0.35
+                            } else {
+                                0.0
+                            };
+                            if min_cruise > 0.0 {
+                                let sign = if error_pct >= 0.0 { 1.0 } else { -1.0 };
+                                duty_cycle = sign * duty_cycle.abs().max(min_cruise);
+                            }
+
+                            // Decel envelope near target to avoid overshoot.
+                            let speed_scale = (abs_error / 12.0).clamp(0.25, 1.0);
+                            commanded_velocity = duty_cycle * config.max_velocity_pct_per_sec;
+                            commanded_velocity *= speed_scale;
+
+                            // Check if settled (use a tighter band for PID)
+                            let settle_band = 0.2; // Tighter than position_deadband_pct
+                            if error_pct.abs() <= settle_band && commanded_velocity.abs() < 1.0 {
+                                status.state = MotorState::Idle;
+                                status.velocity_pct_per_sec = 0.0;
+                                target_position_pct = None;
+                                commanded_velocity = 0.0;
+                                pid_controller.reset();
+                            } else {
+                                status.velocity_pct_per_sec = commanded_velocity;
+                            }
                         }
+                    } else {
+                        status.state = MotorState::Idle;
+                        status.velocity_pct_per_sec = 0.0;
+                        target_position_pct = None;
+                        commanded_velocity = 0.0;
                     }
-                } else {
-                    status.state = MotorState::Idle;
+                }
+                MotorState::MovingAtVelocity => {
+                    commanded_velocity = target_velocity_pct_per_sec;
+                    status.velocity_pct_per_sec = target_velocity_pct_per_sec;
+                }
+                MotorState::Fault => {
+                    target_velocity_pct_per_sec = 0.0;
                     status.velocity_pct_per_sec = 0.0;
-                    target_position_pct = None;
                     commanded_velocity = 0.0;
                 }
-            }
-            MotorState::MovingAtVelocity => {
-                commanded_velocity = target_velocity_pct_per_sec;
-                status.velocity_pct_per_sec = target_velocity_pct_per_sec;
-            }
-            MotorState::Fault => {
-                target_velocity_pct_per_sec = 0.0;
-                status.velocity_pct_per_sec = 0.0;
-                commanded_velocity = 0.0;
-            }
-            MotorState::RawDrive => {
-                // Raw mode is always handled by direct_drive branch above.
-                status.state = MotorState::Idle;
-                commanded_velocity = 0.0;
-            }
+                MotorState::RawDrive => {
+                    // Raw mode is always handled by direct_drive branch above.
+                    status.state = MotorState::Idle;
+                    commanded_velocity = 0.0;
+                }
             }
 
             if at_bottom_limit {

@@ -8,10 +8,10 @@ use portable_atomic::{AtomicI32, AtomicU8, Ordering};
 pub mod controller;
 pub mod driver;
 pub mod encoder;
-pub mod task;
 pub mod pid_controller;
 pub mod pid_storage;
 pub mod pid_tuner;
+pub mod task;
 
 pub const MOTOR_CMD_QUEUE_DEPTH: usize = 8;
 
@@ -181,8 +181,11 @@ impl Default for MotorStatus {
     }
 }
 
-pub static MOTOR_CMD_CHANNEL: Channel<CriticalSectionRawMutex, MotorCommand, MOTOR_CMD_QUEUE_DEPTH> =
-    Channel::new();
+pub static MOTOR_CMD_CHANNEL: Channel<
+    CriticalSectionRawMutex,
+    MotorCommand,
+    MOTOR_CMD_QUEUE_DEPTH,
+> = Channel::new();
 pub static MOTOR_STATUS_SIGNAL: Signal<CriticalSectionRawMutex, MotorStatus> = Signal::new();
 pub static MOTOR_STATUS: Mutex<CriticalSectionRawMutex, MotorStatus> = Mutex::new(MotorStatus {
     state: MotorState::Idle,

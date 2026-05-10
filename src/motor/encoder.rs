@@ -7,10 +7,8 @@ use esp_hal::{
 };
 
 use super::{
-    EncoderConfig, EncoderInputPull, EncoderPins,
-    MOTOR_ENCODER_A_LEVEL, MOTOR_ENCODER_B_LEVEL,
-    MOTOR_ENCODER_INVALID_TRANSITIONS,
-    MOTOR_ENCODER_TRANSITIONS, MOTOR_ENCODER_VALID_NEG_STEPS,
+    EncoderConfig, EncoderInputPull, EncoderPins, MOTOR_ENCODER_A_LEVEL, MOTOR_ENCODER_B_LEVEL,
+    MOTOR_ENCODER_INVALID_TRANSITIONS, MOTOR_ENCODER_TRANSITIONS, MOTOR_ENCODER_VALID_NEG_STEPS,
     MOTOR_ENCODER_VALID_POS_STEPS, MOTOR_RAW_ENCODER_COUNT,
 };
 
@@ -40,7 +38,10 @@ const DELTA: [i8; 16] = [
 fn gpio_encoder_handler() {
     // SAFETY: see comment on ENCODER_A/B statics above.
     let (a, b) = unsafe {
-        match ((*(&raw mut ENCODER_A)).as_mut(), (*(&raw mut ENCODER_B)).as_mut()) {
+        match (
+            (*(&raw mut ENCODER_A)).as_mut(),
+            (*(&raw mut ENCODER_B)).as_mut(),
+        ) {
             (Some(a), Some(b)) => (a, b),
             _ => return,
         }
@@ -53,8 +54,12 @@ fn gpio_encoder_handler() {
         return;
     }
 
-    if a_fired { a.clear_interrupt(); }
-    if b_fired { b.clear_interrupt(); }
+    if a_fired {
+        a.clear_interrupt();
+    }
+    if b_fired {
+        b.clear_interrupt();
+    }
 
     let a_high = a.is_high();
     let b_high = b.is_high();

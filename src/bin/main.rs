@@ -7,13 +7,13 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use defmt::info;
 use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootCommand};
 use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
 use beancell_holo::cli::{Command, CommandDispatcher};
 use beancell_holo::motor::encoder::init_encoder_interrupts;
-use beancell_holo::motor::{EncoderConfig, EncoderInputPull, EncoderPins, MotorConfig, MotorPins};
 use beancell_holo::motor::task::motor_task;
+use beancell_holo::motor::{EncoderConfig, EncoderInputPull, EncoderPins, MotorConfig, MotorPins};
+use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::Async;
@@ -39,7 +39,7 @@ async fn main(spawner: Spawner) -> ! {
     // generator version: 1.2.0
 
     rtt_target::rtt_init_defmt!();
-    
+
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
@@ -89,10 +89,7 @@ async fn main(spawner: Spawner) -> ! {
     // TODO: Spawn some tasks
     //let _ = spawner;
     spawner
-        .spawn(motor_task(
-            MotorConfig::default(),
-            motor_pins,
-        ))
+        .spawn(motor_task(MotorConfig::default(), motor_pins))
         .ok();
     spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
     spawner.spawn(uart_cli_task(uart_rx, uart_tx)).ok();
@@ -104,7 +101,6 @@ async fn main(spawner: Spawner) -> ! {
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
 }
-
 
 #[embassy_executor::task]
 async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {

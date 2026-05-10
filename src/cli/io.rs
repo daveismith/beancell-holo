@@ -29,7 +29,11 @@ impl NewlineNormalizer {
         }
     }
 
-    fn fill_normalized_chunk<const N: usize>(&mut self, input: &[u8], out: &mut Vec<u8, N>) -> usize {
+    fn fill_normalized_chunk<const N: usize>(
+        &mut self,
+        input: &[u8],
+        out: &mut Vec<u8, N>,
+    ) -> usize {
         let mut consumed = 0;
 
         if let Some(pending) = self.pending_newline {

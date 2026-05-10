@@ -9,8 +9,7 @@ use crate::cli::CommandHandler;
 use crate::motor::{
     MOTOR_CMD_CHANNEL, MOTOR_STATUS, MotorCommand, encoder_a_high, encoder_b_high,
     encoder_invalid_transitions, encoder_transitions, encoder_valid_neg_steps,
-    encoder_valid_pos_steps, raw_encoder_count, reset_encoder_transitions,
-    set_raw_encoder_count,
+    encoder_valid_pos_steps, raw_encoder_count, reset_encoder_transitions, set_raw_encoder_count,
 };
 
 pub struct EchoCommand;
@@ -84,7 +83,11 @@ where
 {
     async fn execute(&self, args: &[&str], io: &mut IO) {
         if args.len() < 2 {
-            writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status|pid|autotune|autotune-status>").ok();
+            writeln!(
+                io,
+                "Usage: motor <home|goto|vel|dir|raw|enc|stop|status|pid|autotune|autotune-status>"
+            )
+            .ok();
             return;
         }
 
@@ -123,7 +126,12 @@ where
                         velocity_pct_per_sec,
                     })
                     .await;
-                writeln!(io, "motor: target velocity set to {:.2}%/s", velocity_pct_per_sec).ok();
+                writeln!(
+                    io,
+                    "motor: target velocity set to {:.2}%/s",
+                    velocity_pct_per_sec
+                )
+                .ok();
             }
             "dir" => {
                 let Some(raw) = args.get(2).copied() else {
@@ -146,7 +154,11 @@ where
                                 high_is_toward_top: false,
                             })
                             .await;
-                        writeln!(io, "motor: direction set to reversed (PH low => toward top)").ok();
+                        writeln!(
+                            io,
+                            "motor: direction set to reversed (PH low => toward top)"
+                        )
+                        .ok();
                     }
                     "status" => {
                         let status = *MOTOR_STATUS.lock().await;
@@ -228,14 +240,29 @@ where
 
                 let status = *MOTOR_STATUS.lock().await;
                 writeln!(io, "raw_encoder_count: {}", raw_encoder_count()).ok();
-                writeln!(io, "logical_encoder_count: {}", status.logical_encoder_count).ok();
-                writeln!(io, "position_clamped_to_limit: {}", status.position_clamped_to_limit).ok();
+                writeln!(
+                    io,
+                    "logical_encoder_count: {}",
+                    status.logical_encoder_count
+                )
+                .ok();
+                writeln!(
+                    io,
+                    "position_clamped_to_limit: {}",
+                    status.position_clamped_to_limit
+                )
+                .ok();
                 writeln!(io, "encoder_a_high: {}", encoder_a_high()).ok();
                 writeln!(io, "encoder_b_high: {}", encoder_b_high()).ok();
                 writeln!(io, "encoder_transitions: {}", encoder_transitions()).ok();
                 writeln!(io, "encoder_valid_pos_steps: {}", encoder_valid_pos_steps()).ok();
                 writeln!(io, "encoder_valid_neg_steps: {}", encoder_valid_neg_steps()).ok();
-                writeln!(io, "encoder_invalid_transitions: {}", encoder_invalid_transitions()).ok();
+                writeln!(
+                    io,
+                    "encoder_invalid_transitions: {}",
+                    encoder_invalid_transitions()
+                )
+                .ok();
             }
             "stop" => {
                 MOTOR_CMD_CHANNEL.send(MotorCommand::Stop).await;
@@ -254,7 +281,12 @@ where
                     }
                 }
                 writeln!(io, "target_position: {:?}", status.target_position_pct).ok();
-                writeln!(io, "target_velocity: {:.2}%/s", status.target_velocity_pct_per_sec).ok();
+                writeln!(
+                    io,
+                    "target_velocity: {:.2}%/s",
+                    status.target_velocity_pct_per_sec
+                )
+                .ok();
                 writeln!(io, "velocity: {:.2}%/s", status.velocity_pct_per_sec).ok();
                 writeln!(
                     io,
@@ -266,9 +298,19 @@ where
                     }
                 )
                 .ok();
-                writeln!(io, "logical_encoder_count: {}", status.logical_encoder_count).ok();
+                writeln!(
+                    io,
+                    "logical_encoder_count: {}",
+                    status.logical_encoder_count
+                )
+                .ok();
                 writeln!(io, "raw_encoder_count: {}", status.raw_encoder_count).ok();
-                writeln!(io, "position_clamped_to_limit: {}", status.position_clamped_to_limit).ok();
+                writeln!(
+                    io,
+                    "position_clamped_to_limit: {}",
+                    status.position_clamped_to_limit
+                )
+                .ok();
                 writeln!(io, "counts_per_stroke: {:?}", status.counts_per_stroke).ok();
                 writeln!(io, "top_limit: {}", status.at_top_limit).ok();
                 writeln!(io, "bottom_limit: {}", status.at_bottom_limit).ok();
@@ -282,7 +324,7 @@ where
                     writeln!(io, "Usage: motor pid <status|set|load|reset>").ok();
                     return;
                 }
-                
+
                 match args[2] {
                     "status" => {
                         let status = *MOTOR_STATUS.lock().await;
@@ -292,14 +334,18 @@ where
                         writeln!(io, "pid_ki: {:.6}", status.pid_ki).ok();
                         writeln!(io, "pid_kd: {:.6}", status.pid_kd).ok();
                         writeln!(io, "pid_gains_tuned: {}", status.pid_gains_tuned).ok();
-                        writeln!(io, "motor pid: Use 'motor autotune' to calibrate for your motor").ok();
+                        writeln!(
+                            io,
+                            "motor pid: Use 'motor autotune' to calibrate for your motor"
+                        )
+                        .ok();
                     }
                     "set" => {
                         if args.len() < 6 {
                             writeln!(io, "Usage: motor pid set <kp> <ki> <kd>").ok();
                             return;
                         }
-                        
+
                         let Ok(kp) = args[3].parse::<f32>() else {
                             writeln!(io, "Invalid Kp value").ok();
                             return;
@@ -312,11 +358,16 @@ where
                             writeln!(io, "Invalid Kd value").ok();
                             return;
                         };
-                        
+
                         MOTOR_CMD_CHANNEL
                             .send(MotorCommand::SetPidGains { kp, ki, kd })
                             .await;
-                        writeln!(io, "motor pid: set requested Kp={}, Ki={}, Kd={}", kp, ki, kd).ok();
+                        writeln!(
+                            io,
+                            "motor pid: set requested Kp={}, Ki={}, Kd={}",
+                            kp, ki, kd
+                        )
+                        .ok();
                     }
                     "load" => {
                         MOTOR_CMD_CHANNEL.send(MotorCommand::LoadPidGains).await;
@@ -333,7 +384,7 @@ where
             }
             "autotune" => {
                 // Check if asking for status
-                    if let Some(&"status") = args.get(2) {
+                if let Some(&"status") = args.get(2) {
                     let status = *MOTOR_STATUS.lock().await;
                     writeln!(io, "tuning_state: {:?}", status.tuning_state).ok();
                     writeln!(io, "tuning_progress: {:.1}%", status.tuning_progress_pct).ok();
@@ -344,9 +395,13 @@ where
                         writeln!(io, "motor autotune: Motor must be homed first").ok();
                         return;
                     }
-                    
+
                     writeln!(io, "motor autotune: Starting PID auto-tuning...").ok();
-                    writeln!(io, "motor autotune: DO NOT INTERRUPT - Let the motor oscillate for ~2 seconds").ok();
+                    writeln!(
+                        io,
+                        "motor autotune: DO NOT INTERRUPT - Let the motor oscillate for ~2 seconds"
+                    )
+                    .ok();
                     MOTOR_CMD_CHANNEL.send(MotorCommand::StartTuning).await;
                     writeln!(io, "motor autotune: Tuning started").ok();
                 }

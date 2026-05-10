@@ -21,7 +21,7 @@ pub struct PidTuner {
     hysteresis_pct: f32,
     relay_output: f32,
     zero_crossings: i32, // Count zero crossings to detect period
-    cycle_count: i32, // Track number of complete oscillations
+    cycle_count: i32,    // Track number of complete oscillations
     max_position: f32,
     min_position: f32,
     last_deviation: f32,
@@ -59,7 +59,8 @@ impl PidTuner {
     }
 
     pub fn progress_percent(&self) -> f32 {
-        let progress = (self.control_cycles_elapsed as f32 / self.max_control_cycles as f32) * 100.0;
+        let progress =
+            (self.control_cycles_elapsed as f32 / self.max_control_cycles as f32) * 100.0;
         progress.min(99.0) // Cap at 99% until complete
     }
 
@@ -96,8 +97,10 @@ impl PidTuner {
 
         // Detect crossings around tune center with hysteresis
         let deviation = position - self.tune_center_position;
-        let crossed_up = self.last_deviation <= -self.hysteresis_pct && deviation >= self.hysteresis_pct;
-        let crossed_down = self.last_deviation >= self.hysteresis_pct && deviation <= -self.hysteresis_pct;
+        let crossed_up =
+            self.last_deviation <= -self.hysteresis_pct && deviation >= self.hysteresis_pct;
+        let crossed_down =
+            self.last_deviation >= self.hysteresis_pct && deviation <= -self.hysteresis_pct;
         if crossed_up || crossed_down {
             self.zero_crossings += 1;
             if self.last_crossing_step > 0 {
@@ -168,7 +171,8 @@ impl PidTuner {
         }
 
         // Average half-period converted to full period in seconds.
-        let avg_half_period_steps = self.half_period_steps_accum as f32 / self.half_period_samples as f32;
+        let avg_half_period_steps =
+            self.half_period_steps_accum as f32 / self.half_period_samples as f32;
         let t_u = 2.0 * avg_half_period_steps * 0.01; // 10ms control period
 
         if t_u <= 0.0 || k_u <= 0.0 {
