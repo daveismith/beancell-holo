@@ -11,8 +11,8 @@ use defmt::info;
 use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootCommand};
 use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
 use beancell_holo::cli::{Command, CommandDispatcher};
-use beancell_holo::motor::encoder::encoder_task;
-use beancell_holo::motor::{EncoderPins, MotorConfig, MotorPins};
+use beancell_holo::motor::encoder::init_encoder_interrupts;
+use beancell_holo::motor::{EncoderConfig, EncoderInputPull, EncoderPins, MotorConfig, MotorPins};
 use beancell_holo::motor::task::motor_task;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -67,6 +67,12 @@ async fn main(spawner: Spawner) -> ! {
         channel_a_pin: peripherals.GPIO21.degrade(),
         channel_b_pin: peripherals.GPIO20.degrade(),
     };
+    let encoder_config = EncoderConfig {
+        input_pull: EncoderInputPull::None,
+        swap_channels: true,
+    };
+
+    init_encoder_interrupts(encoder_pins, encoder_config, peripherals.IO_MUX);
 
     let (uart_rx, uart_tx) = Uart::new(peripherals.UART0, UartConfig::default())
         .unwrap()
@@ -82,7 +88,6 @@ async fn main(spawner: Spawner) -> ! {
 
     // TODO: Spawn some tasks
     //let _ = spawner;
-    spawner.spawn(encoder_task(encoder_pins)).ok();
     spawner
         .spawn(motor_task(
             MotorConfig::default(),
@@ -113,7 +118,7 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
         ),
         Command::new(
             "motor",
-            "Motor control. Usage: motor <home|goto|vel|dir|raw|stop|status>",
+            "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
             MotorCommandHandler,
         ),
     ];
@@ -134,7 +139,7 @@ async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
         ),
         Command::new(
             "motor",
-            "Motor control. Usage: motor <home|goto|vel|dir|raw|stop|status>",
+            "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
             MotorCommandHandler,
         ),
     ];

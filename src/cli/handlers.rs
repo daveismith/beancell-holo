@@ -6,7 +6,11 @@ use core::fmt::Write as FmtWrite;
 use embedded_io_async::Write as AsyncWrite;
 
 use crate::cli::CommandHandler;
-use crate::motor::{MOTOR_CMD_CHANNEL, MOTOR_STATUS, MotorCommand};
+use crate::motor::{
+    MOTOR_CMD_CHANNEL, MOTOR_STATUS, MotorCommand, encoder_a_high, encoder_b_high,
+    encoder_count, encoder_invalid_transitions, encoder_transitions,
+    encoder_valid_neg_steps, encoder_valid_pos_steps,
+};
 
 pub struct EchoCommand;
 
@@ -79,7 +83,7 @@ where
 {
     async fn execute(&self, args: &[&str], io: &mut IO) {
         if args.len() < 2 {
-            writeln!(io, "Usage: motor <home|goto|vel|dir|raw|stop|status>").ok();
+            writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status>").ok();
             return;
         }
 
@@ -89,7 +93,19 @@ where
                 writeln!(io, "motor: homing requested").ok();
             }
             "goto" => {
-                writeln!(io, "motor: goto is disabled in limit-switch-only mode").ok();
+                let Some(raw) = args.get(2) else {
+                    writeln!(io, "Usage: motor goto <position_pct>").ok();
+                    return;
+                };
+                let Ok(target_pct) = raw.parse::<f32>() else {
+                    writeln!(io, "Invalid position: {}", raw).ok();
+                    return;
+                };
+
+                MOTOR_CMD_CHANNEL
+                    .send(MotorCommand::SetPosition { target_pct })
+                    .await;
+                writeln!(io, "motor: target position set to {:.2}%", target_pct).ok();
             }
             "vel" => {
                 let Some(raw) = args.get(2) else {
@@ -196,6 +212,15 @@ where
                     }
                 }
             }
+            "enc" => {
+                writeln!(io, "encoder_count: {}", encoder_count()).ok();
+                writeln!(io, "encoder_a_high: {}", encoder_a_high()).ok();
+                writeln!(io, "encoder_b_high: {}", encoder_b_high()).ok();
+                writeln!(io, "encoder_transitions: {}", encoder_transitions()).ok();
+                writeln!(io, "encoder_valid_pos_steps: {}", encoder_valid_pos_steps()).ok();
+                writeln!(io, "encoder_valid_neg_steps: {}", encoder_valid_neg_steps()).ok();
+                writeln!(io, "encoder_invalid_transitions: {}", encoder_invalid_transitions()).ok();
+            }
             "stop" => {
                 MOTOR_CMD_CHANNEL.send(MotorCommand::Stop).await;
                 writeln!(io, "motor: stop requested").ok();
@@ -235,7 +260,7 @@ where
                 writeln!(io, "fault: {:?}", status.fault_code).ok();
             }
             _ => {
-                writeln!(io, "Usage: motor <home|goto|vel|dir|raw|stop|status>").ok();
+                writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status>").ok();
             }
         }
     }

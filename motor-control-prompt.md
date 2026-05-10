@@ -11,3 +11,5 @@ The schematic shows the motor controler has the mode pin pulled up which indicat
 Ensure your plan also cover the testing and tuning procedure. Design the API in such a way that it can be used with a PID in the future.
 
 Ask any questions that you have.
+
+

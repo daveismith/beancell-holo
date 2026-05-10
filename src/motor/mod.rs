@@ -3,7 +3,7 @@ use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use esp_hal::gpio::AnyPin;
-use portable_atomic::{AtomicI32, Ordering};
+use portable_atomic::{AtomicI32, AtomicU8, Ordering};
 
 pub mod controller;
 pub mod driver;
@@ -57,6 +57,28 @@ pub struct MotorPins {
 pub struct EncoderPins {
     pub channel_a_pin: AnyPin<'static>,
     pub channel_b_pin: AnyPin<'static>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EncoderInputPull {
+    None,
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct EncoderConfig {
+    pub input_pull: EncoderInputPull,
+    pub swap_channels: bool,
+}
+
+impl Default for EncoderConfig {
+    fn default() -> Self {
+        Self {
+            input_pull: EncoderInputPull::None,
+            swap_channels: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -147,6 +169,12 @@ pub static MOTOR_STATUS: Mutex<CriticalSectionRawMutex, MotorStatus> = Mutex::ne
     fault_code: None,
 });
 pub static MOTOR_ENCODER_COUNT: AtomicI32 = AtomicI32::new(0);
+pub static MOTOR_ENCODER_A_LEVEL: AtomicU8 = AtomicU8::new(0);
+pub static MOTOR_ENCODER_B_LEVEL: AtomicU8 = AtomicU8::new(0);
+pub static MOTOR_ENCODER_TRANSITIONS: AtomicI32 = AtomicI32::new(0);
+pub static MOTOR_ENCODER_VALID_POS_STEPS: AtomicI32 = AtomicI32::new(0);
+pub static MOTOR_ENCODER_VALID_NEG_STEPS: AtomicI32 = AtomicI32::new(0);
+pub static MOTOR_ENCODER_INVALID_TRANSITIONS: AtomicI32 = AtomicI32::new(0);
 
 pub fn encoder_count() -> i32 {
     MOTOR_ENCODER_COUNT.load(Ordering::Relaxed)
@@ -158,4 +186,44 @@ pub fn set_encoder_count(count: i32) {
 
 pub fn add_encoder_count(delta: i32) {
     MOTOR_ENCODER_COUNT.fetch_add(delta, Ordering::Relaxed);
+}
+
+pub fn set_encoder_levels(a_high: bool, b_high: bool) {
+    MOTOR_ENCODER_A_LEVEL.store(if a_high { 1 } else { 0 }, Ordering::Relaxed);
+    MOTOR_ENCODER_B_LEVEL.store(if b_high { 1 } else { 0 }, Ordering::Relaxed);
+}
+
+pub fn encoder_a_high() -> bool {
+    MOTOR_ENCODER_A_LEVEL.load(Ordering::Relaxed) != 0
+}
+
+pub fn encoder_b_high() -> bool {
+    MOTOR_ENCODER_B_LEVEL.load(Ordering::Relaxed) != 0
+}
+
+pub fn reset_encoder_transitions() {
+    MOTOR_ENCODER_TRANSITIONS.store(0, Ordering::Relaxed);
+    MOTOR_ENCODER_VALID_POS_STEPS.store(0, Ordering::Relaxed);
+    MOTOR_ENCODER_VALID_NEG_STEPS.store(0, Ordering::Relaxed);
+    MOTOR_ENCODER_INVALID_TRANSITIONS.store(0, Ordering::Relaxed);
+}
+
+pub fn add_encoder_transition() {
+    MOTOR_ENCODER_TRANSITIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn encoder_transitions() -> i32 {
+    MOTOR_ENCODER_TRANSITIONS.load(Ordering::Relaxed)
+}
+
+pub fn encoder_valid_pos_steps() -> i32 {
+    MOTOR_ENCODER_VALID_POS_STEPS.load(Ordering::Relaxed)
+}
+
+pub fn encoder_valid_neg_steps() -> i32 {
+    MOTOR_ENCODER_VALID_NEG_STEPS.load(Ordering::Relaxed)
+}
+
+pub fn encoder_invalid_transitions() -> i32 {
+    MOTOR_ENCODER_INVALID_TRANSITIONS.load(Ordering::Relaxed)
 }
