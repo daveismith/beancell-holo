@@ -116,12 +116,10 @@ where
                 write_raw(io, b"\r\n").await;
                 return Some(line);
             }
-            0x08 | 0x7f => {
-                if cursor > 0 {
-                    line.remove(cursor - 1);
-                    cursor -= 1;
-                    redraw_line(io, prompt, line.as_str(), cursor).await;
-                }
+            0x08 | 0x7f if cursor > 0 => {
+                line.remove(cursor - 1);
+                cursor -= 1;
+                redraw_line(io, prompt, line.as_str(), cursor).await;
             }
             0x1b => {
                 let Some(next) = read_one_byte(io).await else {
@@ -169,17 +167,13 @@ where
                             redraw_line(io, prompt, line.as_str(), cursor).await;
                         }
                     }
-                    b'C' => {
-                        if cursor < line.len() {
-                            cursor += 1;
-                            redraw_line(io, prompt, line.as_str(), cursor).await;
-                        }
+                    b'C' if cursor < line.len() => {
+                        cursor += 1;
+                        redraw_line(io, prompt, line.as_str(), cursor).await;
                     }
-                    b'D' => {
-                        if cursor > 0 {
-                            cursor -= 1;
-                            redraw_line(io, prompt, line.as_str(), cursor).await;
-                        }
+                    b'D' if cursor > 0 => {
+                        cursor -= 1;
+                        redraw_line(io, prompt, line.as_str(), cursor).await;
                     }
                     b'3' => {
                         let Some(tilde) = read_one_byte(io).await else {
@@ -193,11 +187,12 @@ where
                     _ => {}
                 }
             }
-            b if b.is_ascii_graphic() || b == b' ' => {
-                if line.len() < MAX_LINE_SIZE - 1 && line.insert(cursor, b as char).is_ok() {
-                    cursor += 1;
-                    redraw_line(io, prompt, line.as_str(), cursor).await;
-                }
+            b if (b.is_ascii_graphic() || b == b' ')
+                && line.len() < MAX_LINE_SIZE - 1
+                && line.insert(cursor, b as char).is_ok() =>
+            {
+                cursor += 1;
+                redraw_line(io, prompt, line.as_str(), cursor).await;
             }
             _ => {}
         }

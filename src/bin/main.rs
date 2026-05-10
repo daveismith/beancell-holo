@@ -5,7 +5,9 @@
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
     holding buffers for the duration of a data transfer."
 )]
-#![deny(clippy::large_stack_frames)]
+// remove the large frames restriction as it interferes with
+// embassy.
+//#![deny(clippy::large_stack_frames)]
 
 use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootCommand};
 use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
