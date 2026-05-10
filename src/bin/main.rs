@@ -69,7 +69,7 @@ async fn main(spawner: Spawner) -> ! {
     };
     let encoder_config = EncoderConfig {
         input_pull: EncoderInputPull::None,
-        swap_channels: true,
+        swap_channels: false,
     };
 
     init_encoder_interrupts(encoder_pins, encoder_config, peripherals.IO_MUX);

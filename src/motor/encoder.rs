@@ -9,9 +9,9 @@ use esp_hal::{
 use super::{
     EncoderConfig, EncoderInputPull, EncoderPins,
     MOTOR_ENCODER_A_LEVEL, MOTOR_ENCODER_B_LEVEL,
-    MOTOR_ENCODER_COUNT, MOTOR_ENCODER_INVALID_TRANSITIONS,
+    MOTOR_ENCODER_INVALID_TRANSITIONS,
     MOTOR_ENCODER_TRANSITIONS, MOTOR_ENCODER_VALID_NEG_STEPS,
-    MOTOR_ENCODER_VALID_POS_STEPS,
+    MOTOR_ENCODER_VALID_POS_STEPS, MOTOR_RAW_ENCODER_COUNT,
 };
 
 // Safety: written exactly once during init (before any interrupt can fire),
@@ -73,11 +73,11 @@ fn gpio_encoder_handler() {
     MOTOR_ENCODER_TRANSITIONS.fetch_add(1, Ordering::Relaxed);
     match delta {
         1 => {
-            MOTOR_ENCODER_COUNT.fetch_add(1, Ordering::Relaxed);
+            MOTOR_RAW_ENCODER_COUNT.fetch_add(1, Ordering::Relaxed);
             MOTOR_ENCODER_VALID_POS_STEPS.fetch_add(1, Ordering::Relaxed);
         }
         -1 => {
-            MOTOR_ENCODER_COUNT.fetch_add(-1, Ordering::Relaxed);
+            MOTOR_RAW_ENCODER_COUNT.fetch_add(-1, Ordering::Relaxed);
             MOTOR_ENCODER_VALID_NEG_STEPS.fetch_add(1, Ordering::Relaxed);
         }
         _ => {
@@ -116,7 +116,7 @@ pub fn init_encoder_interrupts(pins: EncoderPins, config: EncoderConfig, io_mux:
 
     // Initialise all shared state before placing pins in statics, after which
     // the ISR may fire at any time.
-    MOTOR_ENCODER_COUNT.store(0, Ordering::Relaxed);
+    MOTOR_RAW_ENCODER_COUNT.store(0, Ordering::Relaxed);
     MOTOR_ENCODER_TRANSITIONS.store(0, Ordering::Relaxed);
     MOTOR_ENCODER_VALID_POS_STEPS.store(0, Ordering::Relaxed);
     MOTOR_ENCODER_VALID_NEG_STEPS.store(0, Ordering::Relaxed);

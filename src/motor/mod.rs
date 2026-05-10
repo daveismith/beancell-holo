@@ -116,10 +116,12 @@ pub struct MotorStatus {
     pub target_velocity_pct_per_sec: f32,
     pub velocity_pct_per_sec: f32,
     pub direction_high_is_toward_top: bool,
-    pub encoder_count: i32,
+    pub logical_encoder_count: i32,
+    pub raw_encoder_count: i32,
     pub counts_per_stroke: Option<i32>,
     pub at_top_limit: bool,
     pub at_bottom_limit: bool,
+    pub position_clamped_to_limit: bool,
     pub raw_mode_enabled: bool,
     pub raw_ph_high: bool,
     pub raw_en_high: bool,
@@ -136,10 +138,12 @@ impl Default for MotorStatus {
             target_velocity_pct_per_sec: 0.0,
             velocity_pct_per_sec: 0.0,
             direction_high_is_toward_top: false,
-            encoder_count: 0,
+            logical_encoder_count: 0,
+            raw_encoder_count: 0,
             counts_per_stroke: None,
             at_top_limit: false,
             at_bottom_limit: false,
+            position_clamped_to_limit: false,
             raw_mode_enabled: false,
             raw_ph_high: false,
             raw_en_high: false,
@@ -159,16 +163,18 @@ pub static MOTOR_STATUS: Mutex<CriticalSectionRawMutex, MotorStatus> = Mutex::ne
     target_velocity_pct_per_sec: 0.0,
     velocity_pct_per_sec: 0.0,
     direction_high_is_toward_top: false,
-    encoder_count: 0,
+    logical_encoder_count: 0,
+    raw_encoder_count: 0,
     counts_per_stroke: None,
     at_top_limit: false,
     at_bottom_limit: false,
+    position_clamped_to_limit: false,
     raw_mode_enabled: false,
     raw_ph_high: false,
     raw_en_high: false,
     fault_code: None,
 });
-pub static MOTOR_ENCODER_COUNT: AtomicI32 = AtomicI32::new(0);
+pub static MOTOR_RAW_ENCODER_COUNT: AtomicI32 = AtomicI32::new(0);
 pub static MOTOR_ENCODER_A_LEVEL: AtomicU8 = AtomicU8::new(0);
 pub static MOTOR_ENCODER_B_LEVEL: AtomicU8 = AtomicU8::new(0);
 pub static MOTOR_ENCODER_TRANSITIONS: AtomicI32 = AtomicI32::new(0);
@@ -176,16 +182,16 @@ pub static MOTOR_ENCODER_VALID_POS_STEPS: AtomicI32 = AtomicI32::new(0);
 pub static MOTOR_ENCODER_VALID_NEG_STEPS: AtomicI32 = AtomicI32::new(0);
 pub static MOTOR_ENCODER_INVALID_TRANSITIONS: AtomicI32 = AtomicI32::new(0);
 
-pub fn encoder_count() -> i32 {
-    MOTOR_ENCODER_COUNT.load(Ordering::Relaxed)
+pub fn raw_encoder_count() -> i32 {
+    MOTOR_RAW_ENCODER_COUNT.load(Ordering::Relaxed)
 }
 
-pub fn set_encoder_count(count: i32) {
-    MOTOR_ENCODER_COUNT.store(count, Ordering::Relaxed);
+pub fn set_raw_encoder_count(count: i32) {
+    MOTOR_RAW_ENCODER_COUNT.store(count, Ordering::Relaxed);
 }
 
-pub fn add_encoder_count(delta: i32) {
-    MOTOR_ENCODER_COUNT.fetch_add(delta, Ordering::Relaxed);
+pub fn add_raw_encoder_count(delta: i32) {
+    MOTOR_RAW_ENCODER_COUNT.fetch_add(delta, Ordering::Relaxed);
 }
 
 pub fn set_encoder_levels(a_high: bool, b_high: bool) {

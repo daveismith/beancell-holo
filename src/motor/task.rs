@@ -3,7 +3,7 @@ use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, 
 
 use super::{
     MOTOR_CMD_CHANNEL, MOTOR_STATUS, MOTOR_STATUS_SIGNAL, MotorCommand, MotorConfig, MotorPins,
-    MotorState, encoder_count, set_encoder_count,
+    MotorState, raw_encoder_count, set_raw_encoder_count,
 };
 
 const MIN_VALID_COUNTS_PER_STROKE: i32 = 20;
@@ -86,17 +86,32 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
 
         let at_top_limit = is_limit_active(&top_limit, config.limit_switch_active_low);
         let at_bottom_limit = is_limit_active(&bottom_limit, config.limit_switch_active_low);
-        let current_encoder_count = encoder_count();
+        let current_raw_encoder_count = raw_encoder_count();
+        let current_logical_encoder_count = if status.is_homed {
+            if at_bottom_limit {
+                0
+            } else if at_top_limit {
+                counts_per_stroke.unwrap_or(current_raw_encoder_count)
+            } else {
+                current_raw_encoder_count
+            }
+        } else {
+            current_raw_encoder_count
+        };
+        let position_clamped_to_limit =
+            status.is_homed && (at_bottom_limit || (at_top_limit && counts_per_stroke.is_some()));
 
         status.at_top_limit = at_top_limit;
         status.at_bottom_limit = at_bottom_limit;
         status.direction_high_is_toward_top = direction_high_is_toward_top;
-        status.encoder_count = current_encoder_count;
+        status.logical_encoder_count = current_logical_encoder_count;
+        status.raw_encoder_count = current_raw_encoder_count;
         status.counts_per_stroke = counts_per_stroke;
+        status.position_clamped_to_limit = position_clamped_to_limit;
         status.raw_mode_enabled = direct_drive.is_some();
         status.position_pct = if let Some(stroke) = counts_per_stroke {
             if stroke > 0 {
-                Some(((current_encoder_count as f32 / stroke as f32) * 100.0).clamp(0.0, 100.0))
+                Some(((current_logical_encoder_count as f32 / stroke as f32) * 100.0).clamp(0.0, 100.0))
             } else if at_bottom_limit {
                 Some(config.min_position_pct)
             } else if at_top_limit {
@@ -124,7 +139,7 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                     status.raw_mode_enabled = false;
                     target_position_pct = None;
                     if at_bottom_limit {
-                        set_encoder_count(0);
+                        set_raw_encoder_count(0);
                         homing_phase = Some(HomingPhase::SeekTop);
                     } else {
                         homing_phase = Some(HomingPhase::SeekBottom);
@@ -205,8 +220,9 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
             MotorState::Homing => match homing_phase {
                 Some(HomingPhase::SeekBottom) => {
                     if at_bottom_limit {
-                        set_encoder_count(0);
-                        status.encoder_count = 0;
+                        set_raw_encoder_count(0);
+                        status.logical_encoder_count = 0;
+                        status.raw_encoder_count = 0;
                         homing_phase = Some(HomingPhase::SeekTop);
                         commanded_velocity = 0.0;
                     } else {
@@ -215,7 +231,7 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                 }
                 Some(HomingPhase::SeekTop) => {
                     if at_top_limit {
-                        let stroke = encoder_count().abs();
+                        let stroke = raw_encoder_count().abs();
                         if stroke >= MIN_VALID_COUNTS_PER_STROKE {
                             counts_per_stroke = Some(stroke);
                             status.counts_per_stroke = Some(stroke);
@@ -234,8 +250,9 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                 }
                 Some(HomingPhase::ReturnBottom) => {
                     if at_bottom_limit {
-                        set_encoder_count(0);
-                        status.encoder_count = 0;
+                        set_raw_encoder_count(0);
+                        status.logical_encoder_count = 0;
+                        status.raw_encoder_count = 0;
                         status.is_homed = true;
                         status.state = MotorState::Idle;
                         homing_phase = None;
@@ -259,7 +276,7 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                         status.velocity_pct_per_sec = 0.0;
                         commanded_velocity = 0.0;
                     } else {
-                    let current_pct = ((current_encoder_count as f32 / stroke as f32) * 100.0)
+                    let current_pct = ((current_logical_encoder_count as f32 / stroke as f32) * 100.0)
                         .clamp(0.0, 100.0);
                     let error_pct = target_pct - current_pct;
                     if error_pct.abs() <= config.position_deadband_pct {
@@ -310,10 +327,6 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                     status.state = MotorState::Idle;
                     status.velocity_pct_per_sec = 0.0;
                 }
-                if status.is_homed {
-                    set_encoder_count(0);
-                    status.encoder_count = 0;
-                }
             }
 
             if at_top_limit {
@@ -327,12 +340,6 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
                     target_position_pct = None;
                     status.state = MotorState::Idle;
                     status.velocity_pct_per_sec = 0.0;
-                }
-                if status.is_homed {
-                    if let Some(stroke) = counts_per_stroke {
-                        set_encoder_count(stroke);
-                        status.encoder_count = stroke;
-                    }
                 }
             }
 

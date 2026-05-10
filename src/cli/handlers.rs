@@ -8,8 +8,9 @@ use embedded_io_async::Write as AsyncWrite;
 use crate::cli::CommandHandler;
 use crate::motor::{
     MOTOR_CMD_CHANNEL, MOTOR_STATUS, MotorCommand, encoder_a_high, encoder_b_high,
-    encoder_count, encoder_invalid_transitions, encoder_transitions,
-    encoder_valid_neg_steps, encoder_valid_pos_steps,
+    encoder_invalid_transitions, encoder_transitions, encoder_valid_neg_steps,
+    encoder_valid_pos_steps, raw_encoder_count, reset_encoder_transitions,
+    set_raw_encoder_count,
 };
 
 pub struct EchoCommand;
@@ -213,7 +214,22 @@ where
                 }
             }
             "enc" => {
-                writeln!(io, "encoder_count: {}", encoder_count()).ok();
+                if matches!(args.get(2).copied(), Some("reset")) {
+                    reset_encoder_transitions();
+                    writeln!(io, "motor: encoder diagnostics reset").ok();
+                    return;
+                }
+
+                if matches!(args.get(2).copied(), Some("zero")) {
+                    set_raw_encoder_count(0);
+                    writeln!(io, "motor: raw encoder count zeroed").ok();
+                    return;
+                }
+
+                let status = *MOTOR_STATUS.lock().await;
+                writeln!(io, "raw_encoder_count: {}", raw_encoder_count()).ok();
+                writeln!(io, "logical_encoder_count: {}", status.logical_encoder_count).ok();
+                writeln!(io, "position_clamped_to_limit: {}", status.position_clamped_to_limit).ok();
                 writeln!(io, "encoder_a_high: {}", encoder_a_high()).ok();
                 writeln!(io, "encoder_b_high: {}", encoder_b_high()).ok();
                 writeln!(io, "encoder_transitions: {}", encoder_transitions()).ok();
@@ -250,7 +266,9 @@ where
                     }
                 )
                 .ok();
-                writeln!(io, "encoder_count: {}", status.encoder_count).ok();
+                writeln!(io, "logical_encoder_count: {}", status.logical_encoder_count).ok();
+                writeln!(io, "raw_encoder_count: {}", status.raw_encoder_count).ok();
+                writeln!(io, "position_clamped_to_limit: {}", status.position_clamped_to_limit).ok();
                 writeln!(io, "counts_per_stroke: {:?}", status.counts_per_stroke).ok();
                 writeln!(io, "top_limit: {}", status.at_top_limit).ok();
                 writeln!(io, "bottom_limit: {}", status.at_bottom_limit).ok();
