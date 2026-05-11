@@ -16,6 +16,8 @@ Each interface runs its own CLI session task. Command output and history are sco
 - `reboot [normal|bootloader]`
   - `normal` (default): perform software reset
   - `bootloader`: reports unsupported behavior for ESP32-C3 USB Serial/JTAG CLI path
+- `motor ...` - Motor control commands
+- `wifi ...` - Wi-Fi station mode commands
 
 ### Line Editing and History
 
@@ -59,3 +61,4 @@ After `reboot`, reconnect with `tio /dev/tty.usbmodem101` and confirm prompt ret
 ## Developer Notes
 
 See `docs/usb-cli.md` for architecture and extension details.
+See `docs/wifi-cli.md` for Wi-Fi CLI usage and behavior.

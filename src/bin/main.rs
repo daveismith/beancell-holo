@@ -15,6 +15,8 @@ use beancell_holo::cli::{Command, CommandDispatcher};
 use beancell_holo::motor::encoder::init_encoder_interrupts;
 use beancell_holo::motor::task::motor_task;
 use beancell_holo::motor::{EncoderConfig, EncoderInputPull, EncoderPins, MotorConfig, MotorPins};
+use beancell_holo::wifi::handlers::WifiCommandHandler;
+use beancell_holo::wifi::task::{init_wifi, wifi_control_task, wifi_net_task};
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -25,12 +27,15 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart, UartRx, UartTx};
 use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
 use panic_rtt_target as _;
+use static_cell::StaticCell;
 
 extern crate alloc;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+static RADIO_CTRL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -83,15 +88,17 @@ async fn main(spawner: Spawner) -> ! {
         .into_async()
         .split();
 
-    //let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    //let (mut _wifi_controller, _interfaces) =
-    //    esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
-    //        .expect("Failed to initialize Wi-Fi controller");
+    let radio_ctrl =
+        RADIO_CTRL.init(esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"));
+    let (wifi_controller, wifi_stack, wifi_runner) =
+        init_wifi(radio_ctrl, peripherals.WIFI).expect("Failed to initialize Wi-Fi stack");
 
-    // TODO: Spawn some tasks
-    //let _ = spawner;
     spawner
         .spawn(motor_task(MotorConfig::default(), motor_pins))
+        .ok();
+    spawner.spawn(wifi_net_task(wifi_runner)).ok();
+    spawner
+        .spawn(wifi_control_task(wifi_controller, wifi_stack))
         .ok();
     spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
     spawner.spawn(uart_cli_task(uart_rx, uart_tx)).ok();
@@ -107,7 +114,7 @@ async fn main(spawner: Spawner) -> ! {
 #[embassy_executor::task]
 async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {
     let mut io = UsbCliIo::new(rx, tx);
-    let commands: [Command<UsbCliIo<'static>>; 3] = [
+    let commands: [Command<UsbCliIo<'static>>; 4] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
@@ -119,6 +126,7 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
             "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
             MotorCommandHandler,
         ),
+        Command::new("wifi", "Wi-Fi control commands", WifiCommandHandler),
     ];
     let dispatcher = CommandDispatcher::new(&commands);
 
@@ -128,7 +136,7 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
 #[embassy_executor::task]
 async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
     let mut io = UartCliIo::new(rx, tx);
-    let commands: [Command<UartCliIo<'static>>; 3] = [
+    let commands: [Command<UartCliIo<'static>>; 4] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
@@ -140,6 +148,7 @@ async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
             "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
             MotorCommandHandler,
         ),
+        Command::new("wifi", "Wi-Fi control commands", WifiCommandHandler),
     ];
     let dispatcher = CommandDispatcher::new(&commands);
 
