@@ -235,65 +235,89 @@ async fn connect_with_credentials(
     })
     .await;
 
-    let mode = ModeConfig::Client(
-        ClientConfig::default()
-            .with_ssid(AllocString::from(ssid.as_str()))
-            .with_password(AllocString::from(passphrase.as_str()))
-            .with_auth_method(AuthMethod::Wpa2Wpa3Personal),
-    );
+    let auth_methods = auth_methods_for_passphrase(passphrase.as_str());
+    let mut saw_connect_attempt = false;
 
-    match controller.is_started() {
-        Ok(false) => {
-            if let Err(err) = controller.set_config(&mode) {
-                warn!("set_config failed before start: {:?}", err);
-                set_error("config failed").await;
-                return;
+    for auth_method in auth_methods {
+        let mode = ModeConfig::Client(
+            ClientConfig::default()
+                .with_ssid(AllocString::from(ssid.as_str()))
+                .with_password(AllocString::from(passphrase.as_str()))
+                .with_auth_method(*auth_method),
+        );
+
+        match controller.is_started() {
+            Ok(false) => {
+                if let Err(err) = controller.set_config(&mode) {
+                    warn!("set_config failed before start: {:?}", err);
+                    continue;
+                }
+
+                if let Err(err) = controller.start_async().await {
+                    warn!("Wi-Fi start failed: {:?}", err);
+                    set_error("wifi start failed").await;
+                    return;
+                }
             }
-
-            if let Err(err) = controller.start_async().await {
-                warn!("Wi-Fi start failed: {:?}", err);
+            Ok(true) => {
+                disconnect_if_needed(controller).await;
+                if let Err(err) = controller.set_config(&mode) {
+                    warn!("set_config failed: {:?}", err);
+                    continue;
+                }
+            }
+            Err(err) => {
+                warn!("is_started failed: {:?}", err);
                 set_error("wifi start failed").await;
                 return;
             }
         }
-        Ok(true) => {
+
+        saw_connect_attempt = true;
+        if let Err(err) = controller.connect_async().await {
+            warn!("connect_async failed with {:?}: {:?}", auth_method, err);
+            continue;
+        }
+
+        if with_timeout(WIFI_CONNECT_TIMEOUT, stack.wait_config_up())
+            .await
+            .is_err()
+        {
+            warn!("DHCP timeout with {:?}", auth_method);
             disconnect_if_needed(controller).await;
-            if let Err(err) = controller.set_config(&mode) {
-                warn!("set_config failed: {:?}", err);
-                set_error("config failed").await;
-                return;
-            }
+            continue;
         }
-        Err(err) => {
-            warn!("is_started failed: {:?}", err);
-            set_error("wifi start failed").await;
-            return;
-        }
+
+        let (station_ip, gateway_ip) = ipv4_addrs_from_stack(stack);
+        set_status(WifiStatus {
+            state: WifiState::Connected,
+            ssid: Some(ssid),
+            station_ip,
+            gateway_ip,
+            last_error: None,
+        })
+        .await;
+        return;
     }
 
-    if let Err(err) = controller.connect_async().await {
-        warn!("connect_async failed: {:?}", err);
+    if saw_connect_attempt {
         set_error("connect failed").await;
-        return;
+    } else {
+        set_error("config failed").await;
     }
+}
 
-    if with_timeout(WIFI_CONNECT_TIMEOUT, stack.wait_config_up())
-        .await
-        .is_err()
-    {
-        set_error("dhcp timeout").await;
-        return;
+fn auth_methods_for_passphrase(passphrase: &str) -> &'static [AuthMethod] {
+    if passphrase.is_empty() {
+        &[AuthMethod::None]
+    } else {
+        &[
+            AuthMethod::Wpa3Personal,
+            AuthMethod::Wpa2Wpa3Personal,
+            AuthMethod::Wpa2Personal,
+            AuthMethod::WpaWpa2Personal,
+        ]
     }
-
-    let (station_ip, gateway_ip) = ipv4_addrs_from_stack(stack);
-    set_status(WifiStatus {
-        state: WifiState::Connected,
-        ssid: Some(ssid),
-        station_ip,
-        gateway_ip,
-        last_error: None,
-    })
-    .await;
 }
 
 fn ipv4_addrs_from_stack(stack: Stack<'static>) -> (Option<Ipv4Addr>, Option<Ipv4Addr>) {

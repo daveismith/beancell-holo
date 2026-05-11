@@ -193,7 +193,7 @@ fn parse_ssid_pass(
     ),
     &'static str,
 > {
-    if args.len() < 4 {
+    if args.len() != 4 {
         return Err("Usage: wifi <save|connect> <ssid> <passphrase>");
     }
 
