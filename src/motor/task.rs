@@ -80,7 +80,7 @@ enum AutotunePhase {
 }
 
 #[embassy_executor::task]
-pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
+pub async fn motor_task(config: MotorConfig, pins: MotorPins, pid_storage: PidTuningStorage) {
     let mut ph_pin = Output::new(
         pins.ph_pin,
         Level::Low,
@@ -110,7 +110,6 @@ pub async fn motor_task(config: MotorConfig, pins: MotorPins) {
     let mut ticker = Ticker::every(Duration::from_millis(config.control_period_ms));
 
     // Initialize PID controller with default gains
-    let pid_storage = PidTuningStorage::new();
     let loaded_gains = pid_storage.load_from_nvs().await;
     let initial_gains = loaded_gains.unwrap_or_default();
     let mut pid_controller = PidController::new(initial_gains);

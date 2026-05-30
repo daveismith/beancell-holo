@@ -56,6 +56,7 @@ pub async fn wifi_net_task(mut runner: Runner<'static, Interface>) -> ! {
 pub async fn wifi_control_task(
     mut controller: WifiController<'static>,
     stack: Stack<'static>,
+    storage: storage::WifiCredentialStorage,
 ) -> ! {
     WIFI_TASK_READY.store(true, portable_atomic::Ordering::Relaxed);
 
@@ -69,7 +70,10 @@ pub async fn wifi_control_task(
     loop {
         match WIFI_CMD_CHANNEL.receive().await {
             WifiCommand::SaveDefault { ssid, passphrase } => {
-                match storage::save_credentials(ssid.as_str(), passphrase.as_str()).await {
+                match storage
+                    .save_credentials(ssid.as_str(), passphrase.as_str())
+                    .await
+                {
                     Ok(()) => {
                         info!("Saved default Wi-Fi credentials");
                     }
@@ -79,7 +83,16 @@ pub async fn wifi_control_task(
                     }
                 }
             }
-            WifiCommand::ConnectSaved => match storage::load_credentials().await {
+            WifiCommand::ClearCredentials => match storage.clear_credentials().await {
+                Ok(()) => {
+                    info!("Cleared default Wi-Fi credentials");
+                }
+                Err(_) => {
+                    warn!("Failed to clear default Wi-Fi credentials");
+                    set_error("clear failed").await;
+                }
+            },
+            WifiCommand::ConnectSaved => match storage.load_credentials().await {
                 Ok(Some((ssid, passphrase))) => {
                     last_credentials = Some((ssid.clone(), passphrase.clone()));
                     connect_with_credentials(&mut controller, stack, ssid, passphrase).await;
@@ -99,7 +112,7 @@ pub async fn wifi_control_task(
                 if let Some((ssid, passphrase)) = last_credentials.clone() {
                     connect_with_credentials(&mut controller, stack, ssid, passphrase).await;
                 } else {
-                    match storage::load_credentials().await {
+                    match storage.load_credentials().await {
                         Ok(Some((ssid, passphrase))) => {
                             last_credentials = Some((ssid.clone(), passphrase.clone()));
                             connect_with_credentials(&mut controller, stack, ssid, passphrase)

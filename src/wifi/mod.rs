@@ -90,6 +90,7 @@ pub enum WifiCommand {
         ssid: String<WIFI_SSID_MAX_LEN>,
         passphrase: String<WIFI_PASS_MAX_LEN>,
     },
+    ClearCredentials,
     ConnectSaved,
     Connect {
         ssid: String<WIFI_SSID_MAX_LEN>,

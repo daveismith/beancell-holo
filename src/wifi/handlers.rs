@@ -174,10 +174,8 @@ where
                 }
             }
             "clear" => {
-                match crate::wifi::storage::clear_credentials().await {
-                    Ok(()) => writeln!(io, "wifi: cleared saved credentials").ok(),
-                    Err(_) => writeln!(io, "wifi: failed to clear credentials").ok(),
-                };
+                WIFI_CMD_CHANNEL.send(WifiCommand::ClearCredentials).await;
+                writeln!(io, "wifi: clear requested").ok();
             }
             _ => {
                 writeln!(
