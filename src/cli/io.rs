@@ -5,7 +5,7 @@ use embassy_time::Timer;
 use embedded_io_async::{Read, Write};
 use esp_hal::Async;
 use esp_hal::uart::{UartRx, UartTx};
-use esp_hal::usb_serial_jtag::{UsbSerialJtagRx, UsbSerialJtagTx};
+use esp_hal::usb::usb_serial_jtag::{UsbSerialJtagRx, UsbSerialJtagTx};
 use heapless::Vec;
 
 const TX_CHUNK_SIZE: usize = 128;

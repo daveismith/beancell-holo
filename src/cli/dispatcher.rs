@@ -4,9 +4,10 @@ use alloc::boxed::Box;
 use async_trait::async_trait;
 use core::fmt::Write as FmtWrite;
 use embedded_io_async::Write as AsyncWrite;
-use heapless::Vec;
+use heapless::{String, Vec};
 
 pub const MAX_ARGS: usize = 8;
+const MAX_ARG_LEN: usize = 96;
 
 #[async_trait(?Send)]
 pub trait CommandHandler<IO>: Send + Sync {
@@ -45,10 +46,25 @@ where
     }
 
     pub async fn dispatch(&self, line: &str, io: &mut IO) {
-        let mut args: Vec<&str, MAX_ARGS> = Vec::new();
+        let parsed_args = match parse_args(line) {
+            Ok(args) => args,
+            Err(ParseError::TooManyArgs) => {
+                writeln!(io, "Too many arguments (max {}).", MAX_ARGS).ok();
+                return;
+            }
+            Err(ParseError::ArgTooLong) => {
+                writeln!(io, "Argument too long (max {} chars).", MAX_ARG_LEN).ok();
+                return;
+            }
+            Err(ParseError::UnterminatedQuote) => {
+                writeln!(io, "Unterminated quoted string.").ok();
+                return;
+            }
+        };
 
-        for arg in line.split_whitespace() {
-            if args.push(arg).is_err() {
+        let mut args: Vec<&str, MAX_ARGS> = Vec::new();
+        for arg in &parsed_args {
+            if args.push(arg.as_str()).is_err() {
                 writeln!(io, "Too many arguments (max {}).", MAX_ARGS).ok();
                 return;
             }
@@ -78,4 +94,64 @@ where
 
         writeln!(io, "Unknown command: '{}'", args[0]).ok();
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParseError {
+    TooManyArgs,
+    ArgTooLong,
+    UnterminatedQuote,
+}
+
+fn parse_args(line: &str) -> Result<Vec<String<MAX_ARG_LEN>, MAX_ARGS>, ParseError> {
+    let mut args: Vec<String<MAX_ARG_LEN>, MAX_ARGS> = Vec::new();
+    let mut current: String<MAX_ARG_LEN> = String::new();
+    let mut in_quotes = false;
+    let mut escaping = false;
+    let mut token_started = false;
+
+    for ch in line.chars() {
+        if escaping {
+            current.push(ch).map_err(|_| ParseError::ArgTooLong)?;
+            escaping = false;
+            token_started = true;
+            continue;
+        }
+
+        match ch {
+            '\\' => {
+                escaping = true;
+                token_started = true;
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                token_started = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if token_started {
+                    args.push(current).map_err(|_| ParseError::TooManyArgs)?;
+                    current = String::new();
+                    token_started = false;
+                }
+            }
+            _ => {
+                current.push(ch).map_err(|_| ParseError::ArgTooLong)?;
+                token_started = true;
+            }
+        }
+    }
+
+    if escaping {
+        current.push('\\').map_err(|_| ParseError::ArgTooLong)?;
+    }
+
+    if in_quotes {
+        return Err(ParseError::UnterminatedQuote);
+    }
+
+    if token_started {
+        args.push(current).map_err(|_| ParseError::TooManyArgs)?;
+    }
+
+    Ok(args)
 }

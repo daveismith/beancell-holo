@@ -15,6 +15,8 @@ use beancell_holo::cli::{Command, CommandDispatcher};
 use beancell_holo::motor::encoder::init_encoder_interrupts;
 use beancell_holo::motor::task::motor_task;
 use beancell_holo::motor::{EncoderConfig, EncoderInputPull, EncoderPins, MotorConfig, MotorPins};
+use beancell_holo::wifi::handlers::WifiCommandHandler;
+use beancell_holo::wifi::task::{init_wifi, wifi_control_task, wifi_net_task};
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -23,7 +25,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::gpio::Pin;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart, UartRx, UartTx};
-use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
+use esp_hal::usb::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
 use panic_rtt_target as _;
 
 extern crate alloc;
@@ -83,21 +85,22 @@ async fn main(spawner: Spawner) -> ! {
         .into_async()
         .split();
 
-    //let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    //let (mut _wifi_controller, _interfaces) =
-    //    esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
-    //        .expect("Failed to initialize Wi-Fi controller");
+    let (wifi_controller, wifi_stack, wifi_runner) =
+        init_wifi(peripherals.WIFI).expect("Failed to initialize Wi-Fi stack");
 
-    // TODO: Spawn some tasks
-    //let _ = spawner;
-    spawner
-        .spawn(motor_task(MotorConfig::default(), motor_pins))
-        .ok();
-    spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
-    spawner.spawn(uart_cli_task(uart_rx, uart_tx)).ok();
+    spawner.spawn(
+        motor_task(MotorConfig::default(), motor_pins).expect("Failed to allocate motor task"),
+    );
+    spawner.spawn(wifi_net_task(wifi_runner).expect("Failed to allocate Wi-Fi net task"));
+    spawner.spawn(
+        wifi_control_task(wifi_controller, wifi_stack)
+            .expect("Failed to allocate Wi-Fi control task"),
+    );
+    spawner.spawn(usb_cli_task(usb_rx, usb_tx).expect("Failed to allocate USB CLI task"));
+    spawner.spawn(uart_cli_task(uart_rx, uart_tx).expect("Failed to allocate UART CLI task"));
 
     loop {
-        info!("Hello world!");
+        // info!("Hello world!");
         Timer::after(Duration::from_secs(1)).await;
     }
 
@@ -107,7 +110,7 @@ async fn main(spawner: Spawner) -> ! {
 #[embassy_executor::task]
 async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {
     let mut io = UsbCliIo::new(rx, tx);
-    let commands: [Command<UsbCliIo<'static>>; 3] = [
+    let commands: [Command<UsbCliIo<'static>>; 4] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
@@ -119,6 +122,7 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
             "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
             MotorCommandHandler,
         ),
+        Command::new("wifi", "Wi-Fi control commands", WifiCommandHandler),
     ];
     let dispatcher = CommandDispatcher::new(&commands);
 
@@ -128,7 +132,7 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
 #[embassy_executor::task]
 async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
     let mut io = UartCliIo::new(rx, tx);
-    let commands: [Command<UartCliIo<'static>>; 3] = [
+    let commands: [Command<UartCliIo<'static>>; 4] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
@@ -140,6 +144,7 @@ async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
             "Motor control. Usage: motor <home|goto|vel|dir|raw|enc|stop|status>",
             MotorCommandHandler,
         ),
+        Command::new("wifi", "Wi-Fi control commands", WifiCommandHandler),
     ];
     let dispatcher = CommandDispatcher::new(&commands);
 
