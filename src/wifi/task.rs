@@ -254,7 +254,6 @@ async fn connect_with_credentials(
         return;
     }
 
-
     let (station_ip, gateway_ip) = ipv4_addrs_from_stack(stack);
     set_status(WifiStatus {
         state: WifiState::Connected,
@@ -266,10 +265,7 @@ async fn connect_with_credentials(
     .await;
 }
 
-fn map_wifi_error_to_status(
-    err: WifiError,
-    stage: &'static str,
-) -> &'static str {
+fn map_wifi_error_to_status(err: WifiError, stage: &'static str) -> &'static str {
     match err {
         WifiError::Unsupported => "unsupported wifi mode/auth",
         WifiError::InvalidArguments => "invalid wifi args",
