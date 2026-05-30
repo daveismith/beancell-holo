@@ -37,7 +37,7 @@ where
 
         match args[1] {
             "save" => {
-                let (ssid, passphrase) = match parse_ssid_pass(args) {
+                let (ssid, passphrase) = match parse_ssid_pass_optional(args) {
                     Ok(pair) => pair,
                     Err(msg) => {
                         writeln!(io, "{}", msg).ok();
@@ -55,7 +55,7 @@ where
                 writeln!(io, "wifi: connect request sent").ok();
             }
             "connect" => {
-                let (ssid, passphrase) = match parse_ssid_pass(args) {
+                let (ssid, passphrase) = match parse_ssid_pass_optional(args) {
                     Ok(pair) => pair,
                     Err(msg) => {
                         writeln!(io, "{}", msg).ok();
@@ -120,8 +120,14 @@ where
                 for entry in &scan.entries {
                     writeln!(
                         io,
-                        "ssid={} rssi={} ch={} auth={}",
+                        "ssid={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} rssi={} ch={} auth={}",
                         entry.ssid,
+                        entry.bssid[0],
+                        entry.bssid[1],
+                        entry.bssid[2],
+                        entry.bssid[3],
+                        entry.bssid[4],
+                        entry.bssid[5],
                         entry.signal_strength,
                         entry.channel,
                         auth_str(entry.auth)
@@ -184,7 +190,7 @@ where
     }
 }
 
-fn parse_ssid_pass(
+fn parse_ssid_pass_optional(
     args: &[&str],
 ) -> Result<
     (
@@ -193,8 +199,8 @@ fn parse_ssid_pass(
     ),
     &'static str,
 > {
-    if args.len() != 4 {
-        return Err("Usage: wifi <save|connect> <ssid> <passphrase>");
+    if args.len() != 3 && args.len() != 4 {
+        return Err("Usage: wifi <save|connect> <ssid> [passphrase]");
     }
 
     let mut ssid = heapless::String::<WIFI_SSID_MAX_LEN>::new();
@@ -202,9 +208,11 @@ fn parse_ssid_pass(
         .map_err(|_| "SSID too long (max 32 bytes)")?;
 
     let mut passphrase = heapless::String::<WIFI_PASS_MAX_LEN>::new();
-    passphrase
-        .push_str(args[3])
-        .map_err(|_| "Passphrase too long (max 64 bytes)")?;
+    if let Some(pass) = args.get(3) {
+        passphrase
+            .push_str(pass)
+            .map_err(|_| "Passphrase too long (max 64 bytes)")?;
+    }
 
     Ok((ssid, passphrase))
 }

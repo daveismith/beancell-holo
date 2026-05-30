@@ -6,11 +6,14 @@ use core::net::Ipv4Addr;
 use defmt::{info, warn};
 use embassy_net::icmp::PacketMetadata;
 use embassy_net::icmp::ping::{PingError, PingManager, PingParams};
-use embassy_net::{Config, Runner, Stack, StackResources};
+use embassy_net::{Config as NetConfig, Runner, Stack, StackResources};
 use embassy_time::{Duration, with_timeout};
 use esp_radio::wifi::{
-    AccessPointInfo, AuthMethod, ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice,
+    AuthenticationMethod, Config as WifiConfig, DisconnectReason, Interface, WifiController,
     WifiError,
+    ap::AccessPointInfo,
+    scan::ScanConfig,
+    sta::{ScanMethod, StationConfig},
 };
 use static_cell::StaticCell;
 
@@ -27,26 +30,25 @@ const WIFI_PING_TIMEOUT: Duration = Duration::from_secs(2);
 static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 
 pub fn init_wifi(
-    radio: &'static esp_radio::Controller<'static>,
     wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
 ) -> Result<
     (
         WifiController<'static>,
         Stack<'static>,
-        Runner<'static, WifiDevice<'static>>,
+        Runner<'static, Interface>,
     ),
     WifiError,
 > {
-    let (controller, interfaces) =
-        esp_radio::wifi::new(radio, wifi_peripheral, Default::default())?;
-    let config = Config::dhcpv4(Default::default());
+    let controller = esp_radio::wifi::WifiController::new(wifi_peripheral, Default::default())?;
+    let station_interface = esp_radio::wifi::Interface::station();
+    let config = NetConfig::dhcpv4(Default::default());
     let resources = STACK_RESOURCES.init(StackResources::new());
-    let (stack, runner) = embassy_net::new(interfaces.sta, config, resources, 0xD15C_A11E_u64);
+    let (stack, runner) = embassy_net::new(station_interface, config, resources, 0xD15C_A11E_u64);
     Ok((controller, stack, runner))
 }
 
 #[embassy_executor::task]
-pub async fn wifi_net_task(mut runner: Runner<'static, WifiDevice<'static>>) -> ! {
+pub async fn wifi_net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
 }
 
@@ -119,14 +121,9 @@ pub async fn wifi_control_task(
             WifiCommand::Scan => {
                 let status_before_scan = WIFI_STATUS.lock().await.clone();
                 set_transient_state(WifiState::Scanning).await;
-                if let Err(err) = ensure_started_sta(&mut controller).await {
-                    warn!("Wi-Fi start failed for scan: {:?}", err);
-                    set_error("wifi start failed").await;
-                    continue;
-                }
 
                 let scan_config = ScanConfig::default().with_max(WIFI_SCAN_MAX_RESULTS);
-                match controller.scan_with_config_async(scan_config).await {
+                match controller.scan_async(&scan_config).await {
                     Ok(results) => {
                         update_scan_results(results).await;
                         let mut restored = status_before_scan;
@@ -197,26 +194,11 @@ pub async fn wifi_control_task(
     }
 }
 
-async fn ensure_started_sta(controller: &mut WifiController<'static>) -> Result<(), WifiError> {
-    if !controller.is_started()? {
-        let mode = ModeConfig::Client(ClientConfig::default());
-        controller.set_config(&mode)?;
-        controller.start_async().await?;
-    }
-    Ok(())
-}
-
 async fn disconnect_if_needed(controller: &mut WifiController<'static>) {
-    match controller.is_connected() {
-        Ok(true) => {
-            if let Err(err) = controller.disconnect_async().await {
-                warn!("disconnect_async failed: {:?}", err);
-            }
-        }
-        Ok(false) => {}
-        Err(err) => {
-            warn!("is_connected failed before disconnect: {:?}", err);
-        }
+    if controller.is_connected()
+        && let Err(err) = controller.disconnect_async().await
+    {
+        warn!("is_connected failed before disconnect: {:?}", err);
     }
 }
 
@@ -235,88 +217,81 @@ async fn connect_with_credentials(
     })
     .await;
 
-    let auth_methods = auth_methods_for_passphrase(passphrase.as_str());
-    let mut saw_connect_attempt = false;
+    let password = if passphrase.is_empty() {
+        AllocString::new()
+    } else {
+        AllocString::from(passphrase.as_str())
+    };
 
-    for auth_method in auth_methods {
-        let mode = ModeConfig::Client(
-            ClientConfig::default()
-                .with_ssid(AllocString::from(ssid.as_str()))
-                .with_password(AllocString::from(passphrase.as_str()))
-                .with_auth_method(*auth_method),
-        );
+    let station_config = StationConfig::default()
+        .with_ssid(AllocString::from(ssid.as_str()))
+        .with_password(password)
+        .with_scan_method(ScanMethod::AllChannels)
+        .with_failure_retry_cnt(3);
 
-        match controller.is_started() {
-            Ok(false) => {
-                if let Err(err) = controller.set_config(&mode) {
-                    warn!("set_config failed before start: {:?}", err);
-                    continue;
-                }
+    disconnect_if_needed(controller).await;
 
-                if let Err(err) = controller.start_async().await {
-                    warn!("Wi-Fi start failed: {:?}", err);
-                    set_error("wifi start failed").await;
-                    return;
-                }
-            }
-            Ok(true) => {
-                disconnect_if_needed(controller).await;
-                if let Err(err) = controller.set_config(&mode) {
-                    warn!("set_config failed: {:?}", err);
-                    continue;
-                }
-            }
-            Err(err) => {
-                warn!("is_started failed: {:?}", err);
-                set_error("wifi start failed").await;
-                return;
-            }
-        }
-
-        saw_connect_attempt = true;
-        if let Err(err) = controller.connect_async().await {
-            warn!("connect_async failed with {:?}: {:?}", auth_method, err);
-            continue;
-        }
-
-        if with_timeout(WIFI_CONNECT_TIMEOUT, stack.wait_config_up())
-            .await
-            .is_err()
-        {
-            warn!("DHCP timeout with {:?}", auth_method);
-            disconnect_if_needed(controller).await;
-            continue;
-        }
-
-        let (station_ip, gateway_ip) = ipv4_addrs_from_stack(stack);
-        set_status(WifiStatus {
-            state: WifiState::Connected,
-            ssid: Some(ssid),
-            station_ip,
-            gateway_ip,
-            last_error: None,
-        })
-        .await;
+    if let Err(err) = controller.set_config(&WifiConfig::Station(station_config)) {
+        warn!("set_config failed: {:?}", err);
+        set_error(map_wifi_error_to_status(err, "config")).await;
         return;
     }
 
-    if saw_connect_attempt {
-        set_error("connect failed").await;
-    } else {
-        set_error("config failed").await;
+    if let Err(err) = controller.connect_async().await {
+        warn!("connect_async failed: {:?}", err);
+        set_error(map_wifi_error_to_status(err, "connect")).await;
+        disconnect_if_needed(controller).await;
+        return;
     }
+
+    if with_timeout(WIFI_CONNECT_TIMEOUT, stack.wait_config_up())
+        .await
+        .is_err()
+    {
+        warn!("DHCP timeout on connect");
+        set_error("dhcp timeout").await;
+        disconnect_if_needed(controller).await;
+        return;
+    }
+
+
+    let (station_ip, gateway_ip) = ipv4_addrs_from_stack(stack);
+    set_status(WifiStatus {
+        state: WifiState::Connected,
+        ssid: Some(ssid),
+        station_ip,
+        gateway_ip,
+        last_error: None,
+    })
+    .await;
 }
 
-fn auth_methods_for_passphrase(passphrase: &str) -> &'static [AuthMethod] {
-    if passphrase.is_empty() {
-        &[AuthMethod::None]
-    } else {
-        &[
-            AuthMethod::Wpa3Personal,
-            AuthMethod::Wpa2Wpa3Personal,
-            AuthMethod::Wpa2Personal,
-            AuthMethod::WpaWpa2Personal,
-        ]
+fn map_wifi_error_to_status(
+    err: WifiError,
+    stage: &'static str,
+) -> &'static str {
+    match err {
+        WifiError::Unsupported => "unsupported wifi mode/auth",
+        WifiError::InvalidArguments => "invalid wifi args",
+        WifiError::Disconnected(info) => match info.reason {
+            DisconnectReason::NoAccessPointFound
+            | DisconnectReason::NoAccessPointFoundWithCompatibleSecurity
+            | DisconnectReason::NoAccessPointFoundInAuthmodeThreshold
+            | DisconnectReason::NoAccessPointFoundInRssiThreshold => "ap not found",
+            _ => "connect rejected",
+        },
+        WifiError::Failed => "wifi operation failed",
+        WifiError::OutOfMemory => "wifi out of memory",
+        WifiError::InvalidSsid => "invalid ssid",
+        WifiError::InvalidPassword => "invalid password",
+        WifiError::NotConnected => {
+            if stage == "connect" {
+                "association timeout"
+            } else {
+                "not associated"
+            }
+        }
+        _ => "wifi error",
     }
 }
 
@@ -359,15 +334,15 @@ async fn set_status(status: WifiStatus) {
     WIFI_STATUS_SIGNAL.signal(status);
 }
 
-fn map_auth(auth: Option<AuthMethod>) -> ScanAuth {
+fn map_auth(auth: Option<AuthenticationMethod>) -> ScanAuth {
     match auth {
-        Some(AuthMethod::None) => ScanAuth::Open,
-        Some(AuthMethod::Wpa) => ScanAuth::Wpa,
-        Some(AuthMethod::Wpa2Personal) | Some(AuthMethod::WpaWpa2Personal) => {
+        Some(AuthenticationMethod::None) => ScanAuth::Open,
+        Some(AuthenticationMethod::Wpa) => ScanAuth::Wpa,
+        Some(AuthenticationMethod::Wpa2Personal) | Some(AuthenticationMethod::WpaWpa2Personal) => {
             ScanAuth::Wpa2Personal
         }
-        Some(AuthMethod::Wpa3Personal) => ScanAuth::Wpa3Personal,
-        Some(AuthMethod::Wpa2Wpa3Personal) => ScanAuth::Wpa2Wpa3Personal,
+        Some(AuthenticationMethod::Wpa3Personal) => ScanAuth::Wpa3Personal,
+        Some(AuthenticationMethod::Wpa2Wpa3Personal) => ScanAuth::Wpa2Wpa3Personal,
         _ => ScanAuth::Unknown,
     }
 }
@@ -383,6 +358,7 @@ async fn update_scan_results(results: alloc::vec::Vec<AccessPointInfo>) {
 
         let entry = WifiScanResult {
             ssid,
+            bssid: ap.bssid,
             channel: ap.channel,
             signal_strength: ap.signal_strength,
             auth: map_auth(ap.auth_method),

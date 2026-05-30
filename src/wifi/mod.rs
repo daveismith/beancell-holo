@@ -59,6 +59,7 @@ pub enum ScanAuth {
 #[derive(Clone, Debug)]
 pub struct WifiScanResult {
     pub ssid: String<WIFI_SSID_MAX_LEN>,
+    pub bssid: [u8; 6],
     pub channel: u8,
     pub signal_strength: i8,
     pub auth: ScanAuth,

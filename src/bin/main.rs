@@ -25,17 +25,14 @@ use esp_hal::clock::CpuClock;
 use esp_hal::gpio::Pin;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart, UartRx, UartTx};
-use esp_hal::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
+use esp_hal::usb::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJtagTx};
 use panic_rtt_target as _;
-use static_cell::StaticCell;
 
 extern crate alloc;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
-
-static RADIO_CTRL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -88,23 +85,22 @@ async fn main(spawner: Spawner) -> ! {
         .into_async()
         .split();
 
-    let radio_ctrl =
-        RADIO_CTRL.init(esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"));
     let (wifi_controller, wifi_stack, wifi_runner) =
-        init_wifi(radio_ctrl, peripherals.WIFI).expect("Failed to initialize Wi-Fi stack");
+        init_wifi(peripherals.WIFI).expect("Failed to initialize Wi-Fi stack");
 
-    spawner
-        .spawn(motor_task(MotorConfig::default(), motor_pins))
-        .ok();
-    spawner.spawn(wifi_net_task(wifi_runner)).ok();
-    spawner
-        .spawn(wifi_control_task(wifi_controller, wifi_stack))
-        .ok();
-    spawner.spawn(usb_cli_task(usb_rx, usb_tx)).ok();
-    spawner.spawn(uart_cli_task(uart_rx, uart_tx)).ok();
+    spawner.spawn(
+        motor_task(MotorConfig::default(), motor_pins).expect("Failed to allocate motor task"),
+    );
+    spawner.spawn(wifi_net_task(wifi_runner).expect("Failed to allocate Wi-Fi net task"));
+    spawner.spawn(
+        wifi_control_task(wifi_controller, wifi_stack)
+            .expect("Failed to allocate Wi-Fi control task"),
+    );
+    spawner.spawn(usb_cli_task(usb_rx, usb_tx).expect("Failed to allocate USB CLI task"));
+    spawner.spawn(uart_cli_task(uart_rx, uart_tx).expect("Failed to allocate UART CLI task"));
 
     loop {
-        info!("Hello world!");
+        // info!("Hello world!");
         Timer::after(Duration::from_secs(1)).await;
     }
 
