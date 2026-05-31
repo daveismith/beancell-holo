@@ -9,9 +9,13 @@
 // embassy.
 //#![deny(clippy::large_stack_frames)]
 
-use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootCommand};
+use beancell_holo::cli::handlers::{
+    DisplayCommandHandler, EchoCommand, MotorCommandHandler, RebootCommand,
+};
 use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
 use beancell_holo::cli::{Command, CommandDispatcher};
+use beancell_holo::display::storage::DisplayCredentialStorage;
+use beancell_holo::display::task::display_task;
 use beancell_holo::motor::encoder::init_encoder_interrupts;
 use beancell_holo::motor::pid_storage::PidTuningStorage;
 use beancell_holo::motor::task::motor_task;
@@ -60,6 +64,7 @@ async fn main(spawner: Spawner) -> ! {
     let shared_flash = init_shared_flash(peripherals.FLASH);
     let pid_storage = PidTuningStorage::new(shared_flash);
     let wifi_storage = WifiCredentialStorage::new(shared_flash);
+    let display_storage = DisplayCredentialStorage::new(shared_flash);
 
     info!("Embassy initialized!");
 
@@ -104,6 +109,10 @@ async fn main(spawner: Spawner) -> ! {
         wifi_control_task(wifi_controller, wifi_stack, wifi_storage)
             .expect("Failed to allocate Wi-Fi control task"),
     );
+    spawner.spawn(
+        display_task(peripherals.GPIO5.degrade(), wifi_stack, display_storage)
+            .expect("Failed to allocate display task"),
+    );
     spawner.spawn(usb_cli_task(usb_rx, usb_tx).expect("Failed to allocate USB CLI task"));
     spawner.spawn(uart_cli_task(uart_rx, uart_tx).expect("Failed to allocate UART CLI task"));
 
@@ -118,7 +127,7 @@ async fn main(spawner: Spawner) -> ! {
 #[embassy_executor::task]
 async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'static, Async>) {
     let mut io = UsbCliIo::new(rx, tx);
-    let commands: [Command<UsbCliIo<'static>>; 4] = [
+    let commands: [Command<UsbCliIo<'static>>; 5] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
@@ -131,6 +140,11 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
             MotorCommandHandler,
         ),
         Command::new("wifi", "Wi-Fi control commands", WifiCommandHandler),
+        Command::new(
+            "display",
+            "Spinning display controls",
+            DisplayCommandHandler,
+        ),
     ];
     let dispatcher = CommandDispatcher::new(&commands);
 
@@ -140,7 +154,7 @@ async fn usb_cli_task(rx: UsbSerialJtagRx<'static, Async>, tx: UsbSerialJtagTx<'
 #[embassy_executor::task]
 async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
     let mut io = UartCliIo::new(rx, tx);
-    let commands: [Command<UartCliIo<'static>>; 4] = [
+    let commands: [Command<UartCliIo<'static>>; 5] = [
         Command::new("echo", "Echo a message back", EchoCommand),
         Command::new(
             "reboot",
@@ -153,6 +167,11 @@ async fn uart_cli_task(rx: UartRx<'static, Async>, tx: UartTx<'static, Async>) {
             MotorCommandHandler,
         ),
         Command::new("wifi", "Wi-Fi control commands", WifiCommandHandler),
+        Command::new(
+            "display",
+            "Spinning display controls",
+            DisplayCommandHandler,
+        ),
     ];
     let dispatcher = CommandDispatcher::new(&commands);
 

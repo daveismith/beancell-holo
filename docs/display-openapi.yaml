@@ -1,0 +1,314 @@
+openapi: 3.0.3
+info:
+  title: Spinning Display Controller Protocol
+  description: HTTP API protocol specification for the Spinning Display Platform (accessible at `192.168.4.1` over Port 80).
+  version: 1.1.0
+servers:
+  - url: http://192.168.4.1:80
+    description: Spinning Display AP Default IP Address
+paths:
+  /ctrl/session:
+    get:
+      summary: Establish, end, or verify login session
+      description: This endpoint must be called initially. All subsequent controller calls depend on an active session.
+      parameters:
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [quit]
+          description: Quit the active session. If omitted, establishes a new session.
+      responses:
+        '200':
+          description: Success response
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SessionSuccess'
+                  - $ref: '#/components/schemas/ErrorResponse'
+
+  /DCIM:
+    get:
+      summary: Retrieve available video files
+      description: Returns a list of video files stored in the internal DCIM catalog. Filenames are encoded in hexidecimal representation (e.g., `465f313338392e62696e` represents `F_1389.bin`).
+      responses:
+        '200':
+          description: Catalog index success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DcimResponse'
+
+  /DCIM/{filename_hex}:
+    get:
+      summary: Control playback of specific video file
+      description: Initiates direct video playback of a target file. **Note:** Ensure that the parameter `switcher` is `on` before calling this, otherwise the display will reject playback commands.
+      parameters:
+        - name: filename_hex
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[0-9a-fA-F]+$
+          description: Hexadecimal encoded filename (e.g., `465f313338392e62696e` for `F_1389.bin`).
+        - name: act
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [play]
+          description: The playback activity target.
+      responses:
+        '200':
+          description: Playback command response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleCodeResponse'
+
+  /ctrl/play:
+    get:
+      summary: Control player transport state or poll tracking status
+      description: Coordinates pause, next, prev, and player telemetry details.
+      parameters:
+        - name: action
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [pause, next, previous, status]
+          description: Transport action or status query command.
+      responses:
+        '200':
+          description: Operation execution succeeded
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SimpleCodeResponse'
+                  - $ref: '#/components/schemas/StatusResponse'
+
+  /ctrl/get:
+    get:
+      summary: Query configuration variables
+      description: Fetch system telemetry registers such as LED panel brightness, device angle settings, active loop modes, bluetooth, volume state, etc.
+      parameters:
+        - name: k
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [all]
+          description: Configuration query key range. Only `all` is supported.
+      responses:
+        '200':
+          description: Active configuration registers list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigListResponse'
+
+  /ctrl/set:
+    get:
+      summary: Adjust configuration parameters
+      description: Modifies variable options such as switcher, loop state, volum, or brightness. Query arguments dynamically act as `<key>=<value>` parameters.
+      parameters:
+        - name: brightness
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 3
+          description: LED panel density value.
+        - name: volum
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 3
+          description: Speaker audio volume output level.
+        - name: loop
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [one, all]
+          description: Video looping rule selection.
+        - name: switcher
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [on, off]
+          description: High level panel display toggle. Set to `off` on boot to keep the display dead until files are called.
+      responses:
+        '200':
+          description: Property set outcome response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleCodeResponse'
+
+  /info:
+    get:
+      summary: Fetch global device metadata
+      description: Queries the hardware device identifier, active model type, and software/firmware version tags.
+      responses:
+        '200':
+          description: Metadata response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InfoResponse'
+
+components:
+  schemas:
+    SimpleCodeResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+        desc:
+          type: string
+          example: "Command success"
+      required: [code, desc]
+
+    SessionSuccess:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+        desc:
+          type: string
+          example: "Session success"
+      required: [code, desc]
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 1
+        desc:
+          type: string
+          example: "No active session"
+      required: [code, desc]
+
+    DcimResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+        desc:
+          type: string
+          example: "dcim config"
+        files:
+          type: array
+          items:
+            type: string
+            example: "465f313338392e62696e"
+      required: [code, desc, files]
+
+    StatusResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+        current:
+          type: string
+          example: "465f313338392e62696e"
+          description: Hex encoded active file.
+        progress:
+          type: integer
+          example: 47
+          description: Played duration/frame index offset.
+        state:
+          type: string
+          enum: [ing, playing, idle]
+          example: "idle"
+          description: Run status indication (playing/paused).
+        total:
+          type: integer
+          example: 267
+          description: Total frames/time duration.
+      required: [code, current, progress, state, total]
+
+    ConfigEntry:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+        desc:
+          type: string
+          example: "brightness config"
+        key:
+          type: string
+          example: "brightness"
+        type:
+          type: integer
+          example: 0
+        ro:
+          type: integer
+          example: 0
+        value:
+          oneOf:
+            - type: integer
+              example: 3
+            - type: string
+              example: "all"
+        min:
+          type: integer
+          example: 1
+        max:
+          type: integer
+          example: 3
+        step:
+          type: integer
+          example: 1
+        opts:
+          type: array
+          items:
+            type: string
+            example: "all"
+      required: [code, desc, key, value]
+
+    ConfigListResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+        desc:
+          type: string
+          example: "get all config"
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigEntry'
+      required: [code, desc, data]
+
+    InfoResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+        desc:
+          type: string
+          example: "device info"
+        model:
+          type: string
+          example: "F-MINI12"
+        sw:
+          type: string
+          example: "1.1.0"
+      required: [code, desc, model, sw]
