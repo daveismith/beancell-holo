@@ -211,7 +211,7 @@ async fn run_wifi_connect(storage: &DisplayCredentialStorage) -> Result<(), &'st
                     let default_pass = "12345678";
                     let mut p = heapless::String::new();
                     let _ = p.push_str(default_pass);
-                    
+
                     if storage
                         .save_credentials(entry.ssid.as_str(), default_pass)
                         .await
@@ -219,7 +219,7 @@ async fn run_wifi_connect(storage: &DisplayCredentialStorage) -> Result<(), &'st
                     {
                         warn!("Failed to save automatically discovered credentials");
                     }
-                    
+
                     target_ssid = Some(entry.ssid.clone());
                     target_pass = Some(p);
                     found = true;
@@ -239,7 +239,9 @@ async fn run_wifi_connect(storage: &DisplayCredentialStorage) -> Result<(), &'st
     let (ssid, passphrase) = match (target_ssid, target_pass) {
         (Some(s), Some(p)) if found => (s, p),
         _ => {
-            return Err("Display AP not found (either saved SSID was not visible or no matching 5D_ network was found)");
+            return Err(
+                "Display AP not found (either saved SSID was not visible or no matching 5D_ network was found)",
+            );
         }
     };
 
@@ -1118,19 +1120,24 @@ fn parse_config_response(body: &str, configs: &mut Vec<crate::display::ConfigEnt
     let mut search_ptr = body;
     while let Some(key_idx) = search_ptr.find("\"key\":") {
         let key_sub = &search_ptr[key_idx + 6..];
-        let Some(q1) = key_sub.find('"') else { break; };
-        let Some(q2) = key_sub[q1 + 1..].find('"') else { break; };
+        let Some(q1) = key_sub.find('"') else {
+            break;
+        };
+        let Some(q2) = key_sub[q1 + 1..].find('"') else {
+            break;
+        };
         let key_str = &key_sub[q1 + 1..q1 + 1 + q2];
 
-        let Some(val_idx) = key_sub.find("\"value\":") else { break; };
+        let Some(val_idx) = key_sub.find("\"value\":") else {
+            break;
+        };
         let val_sub = key_sub[val_idx + 8..].trim_start();
-        
+
         let mut val_string = String::<64>::new();
-        
-        if val_sub.starts_with('"') {
+
+        if let Some(stripped) = val_sub.strip_prefix('"') {
             let mut escaped = false;
-            let mut chars = val_sub[1..].chars();
-            while let Some(c) = chars.next() {
+            for c in stripped.chars() {
                 if escaped {
                     let _ = val_string.push(c);
                     escaped = false;
@@ -1153,18 +1160,18 @@ fn parse_config_response(body: &str, configs: &mut Vec<crate::display::ConfigEnt
                 }
             }
         }
-        
+
         let mut k = String::<16>::new();
         let _ = k.push_str(key_str.trim());
-        
+
         let trimmed_val_str = val_string.as_str().trim();
         let mut v = String::<64>::new();
         let _ = v.push_str(trimmed_val_str);
-        
+
         if !k.is_empty() {
             let _ = configs.push(crate::display::ConfigEntry { key: k, value: v });
         }
-        
+
         search_ptr = &key_sub[q1 + 1 + q2..];
     }
 }

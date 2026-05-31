@@ -78,7 +78,7 @@ impl DisplayStatus {
 }
 
 pub fn decode_hex_filename(hex: &str) -> Option<String<32>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let mut s = String::<32>::new();

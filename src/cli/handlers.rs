@@ -611,7 +611,6 @@ where
                     writeln!(io, "Available display files:").ok();
                     for f in &status.files {
                         let decoded = crate::display::decode_hex_filename(f.as_str())
-                            .map(|s| s)
                             .unwrap_or_else(|| {
                                 let mut fallback = heapless::String::new();
                                 let _ = fallback.push_str("<invalid hex>");
@@ -644,7 +643,8 @@ where
                         writeln!(io, "Display Settings:").ok();
                         if !status.configs.is_empty() {
                             for entry in &status.configs {
-                                writeln!(io, "  {}: {}", entry.key.as_str(), entry.value.as_str()).ok();
+                                writeln!(io, "  {}: {}", entry.key.as_str(), entry.value.as_str())
+                                    .ok();
                             }
                         } else {
                             // Fallback if configs haven't been dynamically parsed yet
@@ -711,13 +711,13 @@ where
                         writeln!(io, "play state: {}", play_str).ok();
                         if let Some(f) = status.current_file {
                             let decoded = crate::display::decode_hex_filename(f.as_str())
-                                .map(|s| s)
                                 .unwrap_or_else(|| {
                                     let mut fallback = heapless::String::new();
                                     let _ = fallback.push_str("<invalid hex>");
                                     fallback
                                 });
-                            writeln!(io, "current file: {} ({})", decoded.as_str(), f.as_str()).ok();
+                            writeln!(io, "current file: {} ({})", decoded.as_str(), f.as_str())
+                                .ok();
                             writeln!(io, "progress: {} / {}", status.progress, status.total).ok();
                         }
                     }
