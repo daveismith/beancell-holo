@@ -13,9 +13,12 @@ use beancell_holo::cli::handlers::{EchoCommand, MotorCommandHandler, RebootComma
 use beancell_holo::cli::io::{UartCliIo, UsbCliIo};
 use beancell_holo::cli::{Command, CommandDispatcher};
 use beancell_holo::motor::encoder::init_encoder_interrupts;
+use beancell_holo::motor::pid_storage::PidTuningStorage;
 use beancell_holo::motor::task::motor_task;
 use beancell_holo::motor::{EncoderConfig, EncoderInputPull, EncoderPins, MotorConfig, MotorPins};
+use beancell_holo::shared_flash::init_shared_flash;
 use beancell_holo::wifi::handlers::WifiCommandHandler;
+use beancell_holo::wifi::storage::WifiCredentialStorage;
 use beancell_holo::wifi::task::{init_wifi, wifi_control_task, wifi_net_task};
 use defmt::info;
 use embassy_executor::Spawner;
@@ -54,6 +57,10 @@ async fn main(spawner: Spawner) -> ! {
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
+    let shared_flash = init_shared_flash(peripherals.FLASH);
+    let pid_storage = PidTuningStorage::new(shared_flash);
+    let wifi_storage = WifiCredentialStorage::new(shared_flash);
+
     info!("Embassy initialized!");
 
     // Initialize USB Serial JTAG
@@ -89,11 +96,12 @@ async fn main(spawner: Spawner) -> ! {
         init_wifi(peripherals.WIFI).expect("Failed to initialize Wi-Fi stack");
 
     spawner.spawn(
-        motor_task(MotorConfig::default(), motor_pins).expect("Failed to allocate motor task"),
+        motor_task(MotorConfig::default(), motor_pins, pid_storage)
+            .expect("Failed to allocate motor task"),
     );
     spawner.spawn(wifi_net_task(wifi_runner).expect("Failed to allocate Wi-Fi net task"));
     spawner.spawn(
-        wifi_control_task(wifi_controller, wifi_stack)
+        wifi_control_task(wifi_controller, wifi_stack, wifi_storage)
             .expect("Failed to allocate Wi-Fi control task"),
     );
     spawner.spawn(usb_cli_task(usb_rx, usb_tx).expect("Failed to allocate USB CLI task"));
