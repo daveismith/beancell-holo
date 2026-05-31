@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 extern crate alloc;
 
 use alloc::boxed::Box;
@@ -413,6 +414,362 @@ where
             }
             _ => {
                 writeln!(io, "Usage: motor <home|goto|vel|dir|raw|enc|stop|status|pid|autotune|autotune-status>").ok();
+            }
+        }
+    }
+}
+
+pub struct DisplayCommandHandler;
+
+#[async_trait(?Send)]
+impl<IO> CommandHandler<IO> for DisplayCommandHandler
+where
+    IO: AsyncWrite + FmtWrite,
+{
+    async fn execute(&self, args: &[&str], io: &mut IO) {
+        if args.len() < 2 {
+            writeln!(
+                io,
+                "Usage: display <power|wifi|play|pause|next|prev|brightness|volume|loop|status|dcim|config|switcher|info>"
+            )
+            .ok();
+            return;
+        }
+
+        use crate::display::{
+            DISPLAY_CMD_CHANNEL, DISPLAY_STATUS, DisplayCommand, DisplayPlayState,
+            DisplayPowerState,
+        };
+
+        let send_cmd = |cmd| -> bool { DISPLAY_CMD_CHANNEL.try_send(cmd).is_ok() };
+
+        match args[1] {
+            "power" => {
+                let Some(sub) = args.get(2) else {
+                    writeln!(io, "Usage: display power <on|off>").ok();
+                    return;
+                };
+                match *sub {
+                    "on" => {
+                        if send_cmd(DisplayCommand::PowerOn) {
+                            writeln!(io, "display: power on requested").ok();
+                        } else {
+                            writeln!(io, "display: error: system busy").ok();
+                        }
+                    }
+                    "off" => {
+                        if send_cmd(DisplayCommand::PowerOff) {
+                            writeln!(io, "display: power off requested").ok();
+                        } else {
+                            writeln!(io, "display: error: system busy").ok();
+                        }
+                    }
+                    _ => {
+                        writeln!(io, "Usage: display power <on|off>").ok();
+                    }
+                }
+            }
+            "wifi" => {
+                if args.len() < 3 {
+                    writeln!(io, "Usage: display wifi <ssid> [passphrase]").ok();
+                    return;
+                }
+                let mut ssid = heapless::String::new();
+                if ssid.push_str(args[2]).is_err() {
+                    writeln!(io, "SSID too long").ok();
+                    return;
+                }
+                let mut pass = heapless::String::new();
+                if let Some(p) = args.get(3) {
+                    if pass.push_str(p).is_err() {
+                        writeln!(io, "Passphrase too long").ok();
+                        return;
+                    }
+                }
+                if send_cmd(DisplayCommand::SetWifi {
+                    ssid,
+                    passphrase: pass,
+                }) {
+                    writeln!(io, "display: wifi credentials configured").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "play" => {
+                let Some(sub) = args.get(2) else {
+                    writeln!(io, "Usage: display play <filename>").ok();
+                    return;
+                };
+                let hex_encoded = if let Some(h) = crate::display::encode_filename_to_hex(sub) {
+                    h
+                } else {
+                    writeln!(io, "Failed to encode filename to hex").ok();
+                    return;
+                };
+                if send_cmd(DisplayCommand::PlayFile {
+                    filename_hex: hex_encoded,
+                }) {
+                    writeln!(io, "display: play file requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "pause" => {
+                if send_cmd(DisplayCommand::Pause) {
+                    writeln!(io, "display: pause requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "next" => {
+                if send_cmd(DisplayCommand::Next) {
+                    writeln!(io, "display: next file requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "prev" => {
+                if send_cmd(DisplayCommand::Previous) {
+                    writeln!(io, "display: previous file requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "brightness" => {
+                let Some(sub) = args.get(2) else {
+                    writeln!(io, "Usage: display brightness <1-3>").ok();
+                    return;
+                };
+                let Ok(b) = sub.parse::<u8>() else {
+                    writeln!(io, "Invalid brightness level").ok();
+                    return;
+                };
+                if !(1..=3).contains(&b) {
+                    writeln!(io, "Brightness must be between 1 and 3").ok();
+                    return;
+                }
+                if send_cmd(DisplayCommand::SetBrightness(b)) {
+                    writeln!(io, "display: brightness set requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "volume" => {
+                let Some(sub) = args.get(2) else {
+                    writeln!(io, "Usage: display volume <1-3>").ok();
+                    return;
+                };
+                let Ok(v) = sub.parse::<u8>() else {
+                    writeln!(io, "Invalid volume level").ok();
+                    return;
+                };
+                if !(1..=3).contains(&v) {
+                    writeln!(io, "Volume must be between 1 and 3").ok();
+                    return;
+                }
+                if send_cmd(DisplayCommand::SetVolume(v)) {
+                    writeln!(io, "display: volume set requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "loop" => {
+                let Some(sub) = args.get(2) else {
+                    writeln!(io, "Usage: display loop <one|all>").ok();
+                    return;
+                };
+                let mut mode = heapless::String::new();
+                if mode.push_str(sub).is_err() {
+                    writeln!(io, "Invalid loop mode value").ok();
+                    return;
+                }
+                if send_cmd(DisplayCommand::SetLoop(mode)) {
+                    writeln!(io, "display: loop mode set requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "mute" => {
+                if send_cmd(DisplayCommand::SetVolume(1)) {
+                    writeln!(io, "display: mute set requested (volume = 1)").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "unmute" => {
+                if send_cmd(DisplayCommand::SetVolume(3)) {
+                    writeln!(io, "display: unmute set requested (volume = 3)").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "dcim" => {
+                if send_cmd(DisplayCommand::GetDcim) {
+                    writeln!(io, "display: DCIM list request sent").ok();
+                    embassy_time::Timer::after_millis(800).await;
+                    let status = DISPLAY_STATUS.lock().await;
+                    writeln!(io, "Available display files:").ok();
+                    for f in &status.files {
+                        let decoded = crate::display::decode_hex_filename(f.as_str())
+                            .map(|s| s)
+                            .unwrap_or_else(|| {
+                                let mut fallback = heapless::String::new();
+                                let _ = fallback.push_str("<invalid hex>");
+                                fallback
+                            });
+                        writeln!(io, "  {} ({})", decoded.as_str(), f.as_str()).ok();
+                    }
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "config" => {
+                if args.len() >= 4 {
+                    let mut key = heapless::String::new();
+                    let mut value = heapless::String::new();
+                    if key.push_str(args[2]).is_err() || value.push_str(args[3]).is_err() {
+                        writeln!(io, "display: error: key or value too long").ok();
+                        return;
+                    }
+                    if send_cmd(DisplayCommand::SetConfig { key, value }) {
+                        writeln!(io, "display: config set request sent").ok();
+                    } else {
+                        writeln!(io, "display: error: system busy").ok();
+                    }
+                } else {
+                    if send_cmd(DisplayCommand::GetConfig) {
+                        writeln!(io, "display: config request sent").ok();
+                        embassy_time::Timer::after_millis(800).await;
+                        let status = DISPLAY_STATUS.lock().await.clone();
+                        writeln!(io, "Display Settings:").ok();
+                        if !status.configs.is_empty() {
+                            for entry in &status.configs {
+                                writeln!(io, "  {}: {}", entry.key.as_str(), entry.value.as_str()).ok();
+                            }
+                        } else {
+                            // Fallback if configs haven't been dynamically parsed yet
+                            writeln!(io, "  brightness: {}", status.brightness).ok();
+                            writeln!(io, "  volume: {}", status.volume).ok();
+                            if let Some(l) = status.loop_mode {
+                                writeln!(io, "  loop_mode: {}", l.as_str()).ok();
+                            } else {
+                                writeln!(io, "  loop_mode: unknown").ok();
+                            }
+                            if let Some(a) = status.angle {
+                                writeln!(io, "  angle: {}", a).ok();
+                            } else {
+                                writeln!(io, "  angle: unknown").ok();
+                            }
+                            if let Some(b) = status.ble {
+                                writeln!(io, "  ble: {}", b.as_str()).ok();
+                            } else {
+                                writeln!(io, "  ble: unknown").ok();
+                            }
+                            if let Some(s) = status.switcher {
+                                writeln!(io, "  switch: {}", s.as_str()).ok();
+                            } else {
+                                writeln!(io, "  switch: unknown").ok();
+                            }
+                            if let Some(s) = status.ssid_config {
+                                writeln!(io, "  ssid: {}", s.as_str()).ok();
+                            } else {
+                                writeln!(io, "  ssid: unknown").ok();
+                            }
+                        }
+                    } else {
+                        writeln!(io, "display: error: system busy").ok();
+                    }
+                }
+            }
+            "status" => {
+                if send_cmd(DisplayCommand::GetStatus) {
+                    embassy_time::Timer::after_millis(200).await;
+                    let status = DISPLAY_STATUS.lock().await.clone();
+                    let p_str = match status.power {
+                        DisplayPowerState::Off => "off",
+                        DisplayPowerState::PoweringOn => "booting",
+                        DisplayPowerState::On => "on",
+                        DisplayPowerState::PoweringOff => "shutting down",
+                    };
+                    writeln!(io, "power state: {}", p_str).ok();
+                    if status.power == DisplayPowerState::On {
+                        writeln!(
+                            io,
+                            "station wifi: {}",
+                            if status.wifi_connected {
+                                "connected"
+                            } else {
+                                "disconnected"
+                            }
+                        )
+                        .ok();
+                        let play_str = match status.play_state {
+                            DisplayPlayState::Playing => "playing",
+                            DisplayPlayState::Paused => "paused (idle)",
+                            DisplayPlayState::Offline => "offline",
+                        };
+                        writeln!(io, "play state: {}", play_str).ok();
+                        if let Some(f) = status.current_file {
+                            let decoded = crate::display::decode_hex_filename(f.as_str())
+                                .map(|s| s)
+                                .unwrap_or_else(|| {
+                                    let mut fallback = heapless::String::new();
+                                    let _ = fallback.push_str("<invalid hex>");
+                                    fallback
+                                });
+                            writeln!(io, "current file: {} ({})", decoded.as_str(), f.as_str()).ok();
+                            writeln!(io, "progress: {} / {}", status.progress, status.total).ok();
+                        }
+                    }
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "switcher" => {
+                let Some(sub) = args.get(2) else {
+                    writeln!(io, "Usage: display switcher <on|off>").ok();
+                    return;
+                };
+                let on = match *sub {
+                    "on" => true,
+                    "off" => false,
+                    _ => {
+                        writeln!(io, "Invalid switcher value. Use 'on' or 'off'").ok();
+                        return;
+                    }
+                };
+                if send_cmd(DisplayCommand::SetSwitcher(on)) {
+                    writeln!(io, "display: switcher set requested").ok();
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            "info" => {
+                if send_cmd(DisplayCommand::GetInfo) {
+                    writeln!(io, "display: info request sent").ok();
+                    embassy_time::Timer::after_millis(500).await;
+                    let status = DISPLAY_STATUS.lock().await.clone();
+                    writeln!(io, "Device Info:").ok();
+                    if let Some(m) = status.model {
+                        writeln!(io, "  model: {}", m.as_str()).ok();
+                    } else {
+                        writeln!(io, "  model: unknown").ok();
+                    }
+                    if let Some(v) = status.sw_version {
+                        writeln!(io, "  software version: {}", v.as_str()).ok();
+                    } else {
+                        writeln!(io, "  software version: unknown").ok();
+                    }
+                } else {
+                    writeln!(io, "display: error: system busy").ok();
+                }
+            }
+            _ => {
+                writeln!(
+                    io,
+                    "Usage: display <power|wifi|play|pause|next|prev|brightness|volume|loop|status|dcim|config|switcher|info>"
+                )
+                .ok();
             }
         }
     }
